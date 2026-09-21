@@ -1,0 +1,279 @@
+// Customer Intelligence & Company Growth SaaS — Phase 1 (Foundation) schema.
+// Multi-tenant: every tenant-owned row carries tenant_id, so ALL clients
+// (BetIndia, 1xplay, ...) share these tables, separated by tenant_id.
+//
+// These tables live in a dedicated Postgres schema "saas" so they never collide
+// with the existing BetIndia tables in the "public" schema of the same database.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  schemas  = ["saas"]
+}
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+
+  @@schema("saas")
+}
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  MANAGER
+  VIEWER
+
+  @@schema("saas")
+}
+
+enum MembershipStatus {
+  ACTIVE
+  INVITED
+  DISABLED
+
+  @@schema("saas")
+}
+
+model Tenant {
+  id        String       @id @default(uuid())
+  name      String
+  status    TenantStatus @default(ACTIVE)
+  timezone  String       @default("Asia/Kolkata")
+  currency  String       @default("INR")
+  webhookKey        String  @unique @default(dbgenerated("gen_random_uuid()::text")) @map("webhook_key")
+  webhookSecretHash String? @map("webhook_secret_hash")
+  webhookEnabled    Boolean @default(true) @map("webhook_enabled")
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
+
+  memberships     TenantMembership[]
+  auditLogs       AuditLog[]
+  rolePermissions RolePermission[]
+
+  @@map("tenants")
+  @@schema("saas")
+}
+
+model User {
+  id             String   @id @default(uuid())
+  supabaseUserId String   @unique @map("supabase_user_id")
+  email          String   @unique
+  name           String?
+  status         String   @default("active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  memberships TenantMembership[]
+
+  @@map("users")
+  @@schema("saas")
+}
+
+model TenantMembership {
+  id        String           @id @default(uuid())
+  tenantId  String           @map("tenant_id")
+  userId    String           @map("user_id")
+  role      MembershipRole   @default(VIEWER)
+  status    MembershipStatus @default(ACTIVE)
+  createdAt DateTime         @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([userId])
+  @@map("tenant_memberships")
+  @@schema("saas")
+}
+
+// Optional per-tenant role→permission overrides. Defaults live in code (rbac).
+model RolePermission {
+  id            String         @id @default(uuid())
+  tenantId      String?        @map("tenant_id") // null = platform default
+  role          MembershipRole
+  permissionKey String         @map("permission_key")
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, role, permissionKey])
+  @@map("role_permissions")
+  @@schema("saas")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  tenantId    String   @map("tenant_id")
+  actorUserId String?  @map("actor_user_id")
+  action      String
+  entityType  String?  @map("entity_type")
+  entityId    String?  @map("entity_id")
+  oldValue    Json?    @map("old_value")
+  newValue    Json?    @map("new_value")
+  context     Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@map("audit_logs")
+  @@schema("saas")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 — Customers + Transactions ledger (tenant-scoped)
+// ---------------------------------------------------------------------------
+
+enum TransactionType {
+  DEPOSIT
+  WITHDRAWAL
+
+  @@schema("saas")
+}
+
+enum TxnStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  FAILED
+
+  @@schema("saas")
+}
+
+model Customer {
+  id              String    @id @default(uuid())
+  tenantId        String    @map("tenant_id")
+  externalUserId  String?   @map("external_user_id") // platform "User ID"
+  masterId        String?   @map("master_id") // platform "Master/Branch ID"
+  name            String?
+  phone           String?
+  phoneNormalized String?   @map("phone_normalized")
+  email           String?
+  registrationAt  DateTime? @map("registration_at")
+  accountStatus   String?   @map("account_status")
+  currentLifecycle String?  @map("current_lifecycle") // set by Phase 3 classification
+  currentCategory String?   @map("current_category")
+  ftdDate         DateTime? @map("ftd_date")
+  ftdAmount       Decimal?  @map("ftd_amount") @db.Decimal(18, 2)
+  ftdTransactionId String?  @map("ftd_transaction_id")
+  // Lifetime financial totals from the source CRM report (public.users / uploaded CSV).
+  // The transaction ledger below is only recent/webhook activity, so these hold the
+  // authoritative lifetime deposit/withdrawal picture for Customer 360.
+  totalDeposits        Decimal?  @map("total_deposits") @db.Decimal(18, 2)
+  depositCount         Int?      @map("deposit_count")
+  totalWithdrawals     Decimal?  @map("total_withdrawals") @db.Decimal(18, 2)
+  withdrawalCount      Int?      @map("withdrawal_count")
+  netPnl               Decimal?  @map("net_pnl") @db.Decimal(18, 2)
+  totalBonus           Decimal?  @map("total_bonus") @db.Decimal(18, 2)
+  lastDepositAt        DateTime? @map("last_deposit_at")
+  lastDepositAmount    Decimal?  @map("last_deposit_amount") @db.Decimal(18, 2)
+  lastWithdrawalAt     DateTime? @map("last_withdrawal_at")
+  lastWithdrawalAmount Decimal?  @map("last_withdrawal_amount") @db.Decimal(18, 2)
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  transactions Transaction[]
+
+  @@unique([tenantId, externalUserId])
+  @@index([tenantId, masterId])
+  @@index([tenantId, phoneNormalized])
+  @@map("customers")
+  @@schema("saas")
+}
+
+model Transaction {
+  id                      String          @id @default(uuid())
+  tenantId                String          @map("tenant_id")
+  customerId              String          @map("customer_id")
+  externalTransactionId   String?         @map("external_transaction_id")
+  source                  String          @default("manual")
+  transactionType         TransactionType @map("transaction_type")
+  amount                  Decimal         @db.Decimal(18, 2)
+  currency                String          @default("INR")
+  occurredAt              DateTime        @map("occurred_at")
+  rawStatus               String?         @map("raw_status")
+  normalizedStatus        TxnStatus       @map("normalized_status")
+  isFinanciallySuccessful Boolean         @default(false) @map("is_financially_successful")
+  remarks                 String?
+  createdAt               DateTime        @default(now()) @map("created_at")
+  updatedAt               DateTime        @updatedAt @map("updated_at")
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, source, externalTransactionId])
+  @@index([tenantId, occurredAt])
+  @@index([tenantId, customerId])
+  @@index([tenantId, transactionType, normalizedStatus])
+  @@map("transactions")
+  @@schema("saas")
+}
+
+// Company targets (PRD 15): one target per metric+period, upserted. Achievement is
+// computed live against the dashboard actuals, never stored.
+model Target {
+  id          String   @id @default(uuid())
+  tenantId    String   @map("tenant_id")
+  metric      String   // profit | deposits | ftd | customers
+  period      String   // month | quarter | year
+  targetValue Decimal  @map("target_value") @db.Decimal(18, 2)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@unique([tenantId, metric, period])
+  @@map("targets")
+  @@schema("saas")
+}
+
+// Profit distribution lines (PRD 13): departments + a retained line, each a % of the
+// distributable amount. Changes are audited via audit_logs (no bespoke history table).
+model Allocation {
+  id         String   @id @default(uuid())
+  tenantId   String   @map("tenant_id")
+  name       String
+  percent    Decimal  @db.Decimal(6, 2)
+  isRetained Boolean  @default(false) @map("is_retained")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@index([tenantId])
+  @@map("allocations")
+  @@schema("saas")
+}
+
+// Records every lifecycle/value-category change so history is never overwritten (PRD 6.2).
+model ClassificationEvent {
+  id         String   @id @default(uuid())
+  tenantId   String   @map("tenant_id")
+  customerId String   @map("customer_id")
+  dimension  String   // 'lifecycle' | 'category'
+  oldValue   String?  @map("old_value")
+  newValue   String?  @map("new_value")
+  reason     String?
+  changedAt  DateTime @default(now()) @map("changed_at")
+
+  @@index([tenantId, customerId, changedAt])
+  @@map("classification_events")
+  @@schema("saas")
+}
+
+model WebhookEvent {
+  id               String    @id @default(uuid())
+  tenantId         String    @map("tenant_id")
+  provider         String
+  externalEventId  String    @map("external_event_id")
+  eventType        String?   @map("event_type")
+  payloadHash      String?   @map("payload_hash")
+  processingStatus String    @default("received") @map("processing_status")
+  error            String?
+  receivedAt       DateTime  @default(now()) @map("received_at")
+  processedAt      DateTime? @map("processed_at")
+
+  @@unique([tenantId, provider, externalEventId])
+  @@map("webhook_events")
+  @@schema("saas")
+}
