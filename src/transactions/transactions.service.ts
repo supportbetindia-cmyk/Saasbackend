@@ -102,6 +102,66 @@ export class TransactionsService {
     });
   }
 
+  /** KPI summary + recent rows for a tenant, within [from, to) by occurredAt.
+   * Powers the Transactions page — replaces the old BetIndia-only Supabase read
+   * so each company sees ITS OWN transactions. `from` null = all time. */
+  async summary(tenantId: string, fromMs: number | null, toMs: number) {
+    const where: Prisma.TransactionWhereInput = {
+      tenantId,
+      occurredAt: { ...(fromMs != null ? { gte: new Date(fromMs) } : {}), lt: new Date(toMs) },
+    };
+
+    const grouped = await this.prisma.transaction.groupBy({
+      by: ['transactionType', 'normalizedStatus'],
+      where,
+      _sum: { amount: true },
+      _count: true,
+    });
+    // Roll the (type × status) groups up into the numbers the KPI cards show.
+    // REJECTED and FAILED are both treated as "rejected" for display.
+    const roll = (type: TransactionType, statuses: string[], field: 'amount' | 'count') =>
+      grouped
+        .filter((g) => g.transactionType === type && statuses.includes(String(g.normalizedStatus)))
+        .reduce((n, g) => n + (field === 'amount' ? Number(g._sum.amount ?? 0) : g._count), 0);
+    const ALL = ['APPROVED', 'PENDING', 'REJECTED', 'FAILED'];
+
+    const summary = {
+      depositCount: roll('DEPOSIT', ALL, 'count'),
+      depositTotalAmount: roll('DEPOSIT', ALL, 'amount'),
+      depositApprovedCount: roll('DEPOSIT', ['APPROVED'], 'count'),
+      depositApprovedAmount: roll('DEPOSIT', ['APPROVED'], 'amount'),
+      depositRejectedCount: roll('DEPOSIT', ['REJECTED', 'FAILED'], 'count'),
+      depositRejectedAmount: roll('DEPOSIT', ['REJECTED', 'FAILED'], 'amount'),
+      depositPendingCount: roll('DEPOSIT', ['PENDING'], 'count'),
+      depositPendingAmount: roll('DEPOSIT', ['PENDING'], 'amount'),
+      withdrawalCount: roll('WITHDRAWAL', ALL, 'count'),
+      withdrawalApprovedAmount: roll('WITHDRAWAL', ['APPROVED'], 'amount'),
+      withdrawalPendingAmount: roll('WITHDRAWAL', ['PENDING', 'FAILED'], 'amount'),
+    };
+
+    const rows = await this.prisma.transaction.findMany({
+      where,
+      orderBy: { occurredAt: 'desc' },
+      take: 500,
+      include: { customer: { select: { name: true, phone: true, externalUserId: true } } },
+    });
+    const display = (s: string) => (s === 'APPROVED' ? 'approved' : s === 'PENDING' ? 'pending' : 'rejected');
+    const recent = rows.map((r) => ({
+      id: r.id,
+      type: r.transactionType === 'DEPOSIT' ? 'deposit' : 'withdrawal',
+      transaction_id: r.externalTransactionId,
+      user_name: r.customer?.name ?? null,
+      user_id: r.customer?.externalUserId ?? null,
+      mobile_number: r.customer?.phone ?? null,
+      amount: Number(r.amount),
+      display_status: display(String(r.normalizedStatus)),
+      status_label: String(r.normalizedStatus).toLowerCase(),
+      created_at: r.occurredAt.toISOString(),
+    }));
+
+    return { summary, recent };
+  }
+
   async list(tenantId: string, opts: { type?: string; status?: string; search?: string; page?: number; pageSize?: number }) {
     const page = Math.max(1, opts.page ?? 1);
     const pageSize = Math.min(500, Math.max(1, opts.pageSize ?? 50));

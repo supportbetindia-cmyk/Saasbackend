@@ -33,6 +33,20 @@ export class TransactionsController {
     private readonly audit: AuditService,
   ) {}
 
+  // KPI summary + recent rows for the Transactions page. `from`/`to` are epoch ms
+  // (computed client-side from the IST range picker); `from` omitted = all time.
+  @Get('summary')
+  @RequirePermissions(PERMISSIONS.transactionsRead)
+  summary(
+    @CurrentTenant() tenant: ActiveTenant,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    const fromMs = from ? Number(from) : null;
+    const toMs = to ? Number(to) : Date.now();
+    return this.transactions.summary(tenant.id, Number.isFinite(fromMs as number) ? fromMs : null, toMs);
+  }
+
   @Get()
   @RequirePermissions(PERMISSIONS.transactionsRead)
   list(
