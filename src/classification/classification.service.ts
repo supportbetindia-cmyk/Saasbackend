@@ -39,7 +39,7 @@ export class ClassificationService {
    * single writable-CTE statement so 5k+ customers reclassify in one DB round-trip.
    * Idempotent: re-running with no changes writes nothing.
    */
-  async recomputeTenant(tenantId: string): Promise<{ changed: number }> {
+  async recomputeTenant(tenantId: string, reason = 'Auto recalculated'): Promise<{ changed: number }> {
     const cfg = CLASSIFICATION_CONFIG;
     const sql = `
       with computed as (
@@ -52,14 +52,14 @@ export class ClassificationService {
       lc as (
         insert into saas.classification_events
           (id, tenant_id, customer_id, dimension, old_value, new_value, reason, changed_at)
-        select gen_random_uuid()::text, $1, id, 'lifecycle', old_lc, new_lc, 'Auto recalculated', now()
+        select gen_random_uuid()::text, $1, id, 'lifecycle', old_lc, new_lc, $2, now()
         from computed where new_lc is distinct from old_lc
         returning 1
       ),
       cat as (
         insert into saas.classification_events
           (id, tenant_id, customer_id, dimension, old_value, new_value, reason, changed_at)
-        select gen_random_uuid()::text, $1, id, 'category', old_cat, new_cat, 'Auto recalculated', now()
+        select gen_random_uuid()::text, $1, id, 'category', old_cat, new_cat, $2, now()
         from computed where new_cat is distinct from old_cat
         returning 1
       )
@@ -70,7 +70,7 @@ export class ClassificationService {
         and (comp.new_lc is distinct from c.current_lifecycle
              or comp.new_cat is distinct from c.current_category);
     `;
-    const changed = await this.prisma.$executeRawUnsafe(sql, tenantId);
+    const changed = await this.prisma.$executeRawUnsafe(sql, tenantId, reason);
     return { changed };
   }
 
@@ -89,6 +89,21 @@ export class ClassificationService {
       ),
     ]);
     return { lifecycle, category };
+  }
+
+  async scheduleStatus(tenantId: string) {
+    const [tenant, lastRun] = await Promise.all([
+      this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } }),
+      this.prisma.auditLog.findFirst({ where: { tenantId, action: 'classification.scheduled' }, orderBy: { createdAt: 'desc' }, select: { createdAt: true, newValue: true } }),
+    ]);
+    return {
+      enabled: true,
+      timezone: tenant?.timezone || 'Asia/Kolkata',
+      atRiskDays: CLASSIFICATION_CONFIG.inactivity.atRiskDays,
+      inactiveDays: CLASSIFICATION_CONFIG.inactivity.inactiveDays,
+      lastRunAt: lastRun?.createdAt ?? null,
+      lastResult: lastRun?.newValue ?? null,
+    };
   }
 
   /** Recent lifecycle/tier changes for one customer (for Customer 360). */

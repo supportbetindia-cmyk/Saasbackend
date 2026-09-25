@@ -13,6 +13,8 @@ import { DashboardModule } from './dashboard/dashboard.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { TargetsModule } from './targets/targets.module';
 import { AllocationsModule } from './allocations/allocations.module';
+import { ReportsModule } from './reports/reports.module';
+import { DepartmentsModule } from './departments/departments.module';
 
 @Module({
   imports: [
@@ -30,6 +32,8 @@ import { AllocationsModule } from './allocations/allocations.module';
     WebhooksModule,
     TargetsModule,
     AllocationsModule,
+    ReportsModule,
+    DepartmentsModule,
   ],
 })
 export class AppModule {}

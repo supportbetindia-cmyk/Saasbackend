@@ -1,0 +1,10 @@
+# Terminates HTTPS and forwards to Kong (the Supabase API gateway on :8000).
+# Caddy fetches + renews Let's Encrypt certs automatically. Point the
+# api.betindia.games DNS A record at this VPS first.
+#
+# Run:  caddy run --config ./Caddyfile
+# (or install Caddy as a service and drop this in /etc/caddy/Caddyfile)
+
+api.betindia.games {
+	reverse_proxy localhost:8000
+}

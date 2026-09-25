@@ -25,10 +25,15 @@ export class AuthGuard implements CanActivate {
     const supabaseUserId = String(claims.sub);
     const email = (claims.email ?? `${supabaseUserId}@unknown.local`).toLowerCase();
 
-    const user = await this.prisma.user.upsert({
-      where: { supabaseUserId },
-      update: { email },
-      create: { supabaseUserId, email },
+    const user = await this.prisma.$transaction(async (tx) => {
+      const linked = await tx.user.findUnique({ where: { supabaseUserId } });
+      const value = linked
+        ? await tx.user.update({ where: { id: linked.id }, data: { email } })
+        : await tx.user.findUnique({ where: { email } }).then((invited) => invited?.supabaseUserId.startsWith('invite:')
+          ? tx.user.update({ where: { id: invited.id }, data: { supabaseUserId } })
+          : tx.user.create({ data: { supabaseUserId, email } }));
+      await tx.tenantMembership.updateMany({ where: { userId: value.id, status: 'INVITED' }, data: { status: 'ACTIVE' } });
+      return value;
     });
 
     req.user = { id: user.id, supabaseUserId: user.supabaseUserId, email: user.email, name: user.name };

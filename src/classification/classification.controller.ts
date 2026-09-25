@@ -32,4 +32,10 @@ export class ClassificationController {
   summary(@CurrentTenant() tenant: ActiveTenant) {
     return this.classification.summary(tenant.id);
   }
+
+  @Get('schedule')
+  @RequirePermissions(PERMISSIONS.customersRead)
+  schedule(@CurrentTenant() tenant: ActiveTenant) {
+    return this.classification.scheduleStatus(tenant.id);
+  }
 }

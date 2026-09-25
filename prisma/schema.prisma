@@ -55,6 +55,7 @@ model Tenant {
   memberships     TenantMembership[]
   auditLogs       AuditLog[]
   rolePermissions RolePermission[]
+  departments     Department[]
 
   @@map("tenants")
   @@schema("saas")
@@ -242,6 +243,24 @@ model Allocation {
 
   @@index([tenantId])
   @@map("allocations")
+  @@schema("saas")
+}
+
+// Tenant-managed operating departments used by allocations and budgets.
+model Department {
+  id         String    @id @default(uuid())
+  tenantId   String    @map("tenant_id")
+  name       String
+  sortOrder  Int       @default(0) @map("sort_order")
+  archivedAt DateTime? @map("archived_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, name])
+  @@index([tenantId, archivedAt, sortOrder])
+  @@map("departments")
   @@schema("saas")
 }
 
