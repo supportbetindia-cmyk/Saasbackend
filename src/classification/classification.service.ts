@@ -1,10 +1,28 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { CLASSIFICATION_CONFIG, type ClassificationConfig } from './classification.config';
+import { CLASSIFICATION_CONFIG, parseClassificationConfig, type ClassificationConfig } from './classification.config';
 
 @Injectable()
 export class ClassificationService {
   constructor(private readonly prisma: PrismaService) {}
+
+  /** The tenant's classification config — its saved overrides, or the code defaults. */
+  async getConfig(tenantId: string): Promise<ClassificationConfig> {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { classificationConfig: true },
+    });
+    return tenant?.classificationConfig
+      ? parseClassificationConfig(tenant.classificationConfig)
+      : CLASSIFICATION_CONFIG;
+  }
+
+  /** Save (validated) thresholds for a tenant and return the normalized config. */
+  async saveConfig(tenantId: string, input: unknown): Promise<ClassificationConfig> {
+    const cfg = parseClassificationConfig(input);
+    await this.prisma.tenant.update({ where: { id: tenantId }, data: { classificationConfig: cfg } });
+    return cfg;
+  }
 
   /** SQL CASE that derives a customer's lifecycle stage from their stored numbers. */
   private lifecycleCase(cfg: ClassificationConfig): string {
@@ -40,7 +58,7 @@ export class ClassificationService {
    * Idempotent: re-running with no changes writes nothing.
    */
   async recomputeTenant(tenantId: string, reason = 'Auto recalculated'): Promise<{ changed: number }> {
-    const cfg = CLASSIFICATION_CONFIG;
+    const cfg = await this.getConfig(tenantId);
     const sql = `
       with computed as (
         select id, current_lifecycle as old_lc, current_category as old_cat,
@@ -92,15 +110,16 @@ export class ClassificationService {
   }
 
   async scheduleStatus(tenantId: string) {
-    const [tenant, lastRun] = await Promise.all([
+    const [tenant, lastRun, cfg] = await Promise.all([
       this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } }),
       this.prisma.auditLog.findFirst({ where: { tenantId, action: 'classification.scheduled' }, orderBy: { createdAt: 'desc' }, select: { createdAt: true, newValue: true } }),
+      this.getConfig(tenantId),
     ]);
     return {
       enabled: true,
       timezone: tenant?.timezone || 'Asia/Kolkata',
-      atRiskDays: CLASSIFICATION_CONFIG.inactivity.atRiskDays,
-      inactiveDays: CLASSIFICATION_CONFIG.inactivity.inactiveDays,
+      atRiskDays: cfg.inactivity.atRiskDays,
+      inactiveDays: cfg.inactivity.inactiveDays,
       lastRunAt: lastRun?.createdAt ?? null,
       lastResult: lastRun?.newValue ?? null,
     };

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Put, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/auth.guard';
 import { TenantGuard } from '../auth/tenant.guard';
 import { PermissionsGuard, RequirePermissions } from '../auth/permissions.guard';
@@ -37,5 +37,23 @@ export class ClassificationController {
   @RequirePermissions(PERMISSIONS.customersRead)
   schedule(@CurrentTenant() tenant: ActiveTenant) {
     return this.classification.scheduleStatus(tenant.id);
+  }
+
+  // The tenant's editable classification thresholds (Admin panel).
+  @Get('config')
+  @RequirePermissions(PERMISSIONS.customersRead)
+  getConfig(@CurrentTenant() tenant: ActiveTenant) {
+    return this.classification.getConfig(tenant.id);
+  }
+
+  @Put('config')
+  @RequirePermissions(PERMISSIONS.customersWrite)
+  async saveConfig(@CurrentTenant() tenant: ActiveTenant, @CurrentUser() user: AuthUser, @Body() body: unknown) {
+    const cfg = await this.classification.saveConfig(tenant.id, body);
+    await this.audit.log({
+      tenantId: tenant.id, actorUserId: user.id, action: 'classification.config_updated',
+      entityType: 'classification', newValue: cfg as unknown as Record<string, unknown>,
+    });
+    return cfg;
   }
 }
