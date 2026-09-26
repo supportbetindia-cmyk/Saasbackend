@@ -75,6 +75,7 @@ export class TenantsController {
       configured: Boolean(value.webhookSecretHash),
       depositPath: `/api/v1/webhooks/${value.webhookKey}/deposit`,
       withdrawalPath: `/api/v1/webhooks/${value.webhookKey}/withdrawal`,
+      updatePath: `/api/v1/webhooks/${value.webhookKey}/update`,
     };
   }
 
@@ -96,6 +97,7 @@ export class TenantsController {
       secret: generated.secret,
       depositPath: `/api/v1/webhooks/${value.webhookKey}/deposit`,
       withdrawalPath: `/api/v1/webhooks/${value.webhookKey}/withdrawal`,
+      updatePath: `/api/v1/webhooks/${value.webhookKey}/update`,
     };
   }
 }
