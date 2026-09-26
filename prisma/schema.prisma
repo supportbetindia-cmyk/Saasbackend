@@ -216,6 +216,19 @@ model Transaction {
   @@schema("saas")
 }
 
+// Dedup log for outgoing WhatsApp messages: one row per (tenant, eventKey) so the
+// same transaction+status+template is never messaged twice (webhook retries etc.).
+model WhatsappLog {
+  id        String   @id @default(uuid())
+  tenantId  String   @map("tenant_id")
+  eventKey  String   @map("event_key")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([tenantId, eventKey])
+  @@map("whatsapp_log")
+  @@schema("saas")
+}
+
 // Company targets (PRD 15): one target per metric+period, upserted. Achievement is
 // computed live against the dashboard actuals, never stored.
 model Target {
