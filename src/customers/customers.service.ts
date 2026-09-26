@@ -88,7 +88,14 @@ export class CustomersService {
         : {}),
     };
     const [data, total] = await Promise.all([
-      this.prisma.customer.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (page - 1) * pageSize, take: pageSize }),
+      // Show players WITH money first (depositors have names, deposits and a value
+      // group) so the list isn't a wall of empty rows; newest sign-ups after that.
+      this.prisma.customer.findMany({
+        where,
+        orderBy: [{ totalDeposits: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
       this.prisma.customer.count({ where }),
     ]);
     // Attach today's confirmed deposit/withdrawal totals for this page of players.
