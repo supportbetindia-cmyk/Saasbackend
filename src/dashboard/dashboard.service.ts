@@ -77,4 +77,77 @@ export class DashboardService {
       },
     };
   }
+
+  /** The underlying records behind one overview KPI, for the current period.
+   * Powers "click a card to see the details". */
+  async details(
+    tenantId: string,
+    period: PeriodKey,
+    metric: string,
+    customFrom?: string,
+    customTo?: string,
+  ): Promise<{ metric: string; kind: 'transactions' | 'customers'; label: string; rows: unknown[] }> {
+    const tz = await this.tenantTz(tenantId);
+    const { current: r, label } = computeRanges(tz, period, new Date(), customFrom, customTo);
+    const LIMIT = 500;
+
+    if (metric === 'deposits' || metric === 'withdrawals' || metric === 'transactions') {
+      const typeFilter =
+        metric === 'deposits' ? `and t.transaction_type='DEPOSIT'`
+        : metric === 'withdrawals' ? `and t.transaction_type='WITHDRAWAL'`
+        : '';
+      const rows = await this.prisma.$queryRawUnsafe(
+        `select t.external_transaction_id as txn_id, lower(t.transaction_type::text) as type,
+                c.name, c.external_user_id as user_id, c.phone,
+                t.amount::float8 as amount, t.occurred_at, t.normalized_status::text as status
+           from saas.transactions t join saas.customers c on c.id = t.customer_id
+          where t.tenant_id = $1 and t.is_financially_successful
+            and t.occurred_at >= $2 and t.occurred_at < $3 ${typeFilter}
+          order by t.occurred_at desc limit ${LIMIT}`,
+        tenantId, r.start, r.end,
+      );
+      return { metric, kind: 'transactions', label, rows: rows as unknown[] };
+    }
+
+    if (metric === 'new') {
+      const rows = await this.prisma.$queryRawUnsafe(
+        `select external_user_id as user_id, name, phone, registration_at as occurred_at,
+                current_lifecycle as status
+           from saas.customers
+          where tenant_id = $1 and registration_at >= $2 and registration_at < $3
+          order by registration_at desc limit ${LIMIT}`,
+        tenantId, r.start, r.end,
+      );
+      return { metric, kind: 'customers', label, rows: rows as unknown[] };
+    }
+
+    if (metric === 'ftd') {
+      const rows = await this.prisma.$queryRawUnsafe(
+        `select external_user_id as user_id, name, phone, ftd_date as occurred_at,
+                ftd_amount::float8 as amount
+           from saas.customers
+          where tenant_id = $1 and ftd_date >= $2 and ftd_date < $3
+          order by ftd_date desc limit ${LIMIT}`,
+        tenantId, r.start, r.end,
+      );
+      return { metric, kind: 'customers', label, rows: rows as unknown[] };
+    }
+
+    if (metric === 'active') {
+      const rows = await this.prisma.$queryRawUnsafe(
+        `select c.external_user_id as user_id, c.name, c.phone,
+                count(*)::int as txns, coalesce(sum(t.amount), 0)::float8 as amount,
+                max(t.occurred_at) as occurred_at
+           from saas.transactions t join saas.customers c on c.id = t.customer_id
+          where t.tenant_id = $1 and t.is_financially_successful
+            and t.occurred_at >= $2 and t.occurred_at < $3
+          group by c.id, c.external_user_id, c.name, c.phone
+          order by amount desc limit ${LIMIT}`,
+        tenantId, r.start, r.end,
+      );
+      return { metric, kind: 'customers', label, rows: rows as unknown[] };
+    }
+
+    throw new Error('Unknown metric');
+  }
 }

@@ -26,4 +26,18 @@ export class DashboardController {
     const key: PeriodKey = PERIODS.includes(period as PeriodKey) ? (period as PeriodKey) : 'month';
     return this.dashboard.overview(tenant.id, key, from, to);
   }
+
+  // The records behind one KPI card (metric = deposits|withdrawals|transactions|new|ftd|active).
+  @Get('details')
+  @RequirePermissions(PERMISSIONS.financialDashboardRead)
+  details(
+    @CurrentTenant() tenant: ActiveTenant,
+    @Query('metric') metric: string,
+    @Query('period') period?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    const key: PeriodKey = PERIODS.includes(period as PeriodKey) ? (period as PeriodKey) : 'month';
+    return this.dashboard.details(tenant.id, key, metric ?? 'deposits', from, to);
+  }
 }
