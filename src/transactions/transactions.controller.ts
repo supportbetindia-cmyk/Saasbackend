@@ -8,6 +8,7 @@ import { CurrentTenant, CurrentUser } from '../auth/decorators';
 import type { ActiveTenant, AuthUser } from '../auth/auth.types';
 import { TransactionsService } from './transactions.service';
 import { AuditService } from '../audit/audit.service';
+import { MasterIdPipe } from '../customers/master-scope';
 
 class IngestTransactionDto {
   @IsOptional() @IsString() externalUserId?: string;
@@ -41,10 +42,11 @@ export class TransactionsController {
     @CurrentTenant() tenant: ActiveTenant,
     @Query('from') from?: string,
     @Query('to') to?: string,
+    @Query('masterId', MasterIdPipe) masterId?: string,
   ) {
     const fromMs = from ? Number(from) : null;
     const toMs = to ? Number(to) : Date.now();
-    return this.transactions.summary(tenant.id, Number.isFinite(fromMs as number) ? fromMs : null, toMs);
+    return this.transactions.summary(tenant.id, Number.isFinite(fromMs as number) ? fromMs : null, toMs, masterId);
   }
 
   @Get()
@@ -56,8 +58,9 @@ export class TransactionsController {
     @Query('search') search?: string,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
+    @Query('masterId', MasterIdPipe) masterId?: string,
   ) {
-    return this.transactions.list(tenant.id, { type, status, search, page: Number(page) || undefined, pageSize: Number(pageSize) || undefined });
+    return this.transactions.list(tenant.id, { type, status, search, masterId, page: Number(page) || undefined, pageSize: Number(pageSize) || undefined });
   }
 
   @Post()

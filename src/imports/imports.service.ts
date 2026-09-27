@@ -283,11 +283,35 @@ export class ImportsService {
       tenantId,
     );
 
+    // Imports can add deposits OLDER than one already processed live, which would
+    // leave the first-deposit date stale. Re-derive it from the earliest deposit.
+    await this.recomputeFtd(tenantId);
+
     return {
       sourceTenant: { id: legacyTenant.id, name: legacyTenant.name },
       destinationTenant: { id: tenantId, name: tenantName },
       skippedNoCustomer: skippedRows[0]?.skipped ?? 0,
       processed,
     };
+  }
+
+  /** Set each customer's first-deposit (FTD) date/amount from their earliest successful
+   * deposit. Only ever moves the FTD EARLIER (or fills a blank), so it can never make a
+   * correct date later. Returns the number of customers corrected. */
+  async recomputeFtd(tenantId: string): Promise<number> {
+    return this.prisma.$executeRawUnsafe(
+      `update saas.customers c
+          set ftd_date = f.first_at, ftd_amount = f.first_amount, updated_at = now()
+         from (
+           select customer_id, min(occurred_at) as first_at,
+                  (array_agg(amount order by occurred_at asc, id asc))[1] as first_amount
+             from saas.transactions
+            where tenant_id = $1 and transaction_type = 'DEPOSIT' and is_financially_successful
+            group by customer_id
+         ) f
+        where c.id = f.customer_id and c.tenant_id = $1
+          and (c.ftd_date is null or f.first_at < c.ftd_date)`,
+      tenantId,
+    );
   }
 }

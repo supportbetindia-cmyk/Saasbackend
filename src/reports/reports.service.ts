@@ -10,14 +10,14 @@ const TARGET_KPI = { profit: 'companyPl', deposits: 'deposits', ftd: 'ftd', cust
 export class ReportsService {
   constructor(private readonly prisma: PrismaService, private readonly dashboard: DashboardService) {}
 
-  async get(tenantId: string, type: ReportType) {
-    const overview = await this.dashboard.overview(tenantId, PERIOD[type]);
+  async get(tenantId: string, type: ReportType, masterId?: string) {
+    const overview = await this.dashboard.overview(tenantId, PERIOD[type], undefined, undefined, masterId);
     const result = {
       type,
       generatedAt: new Date(),
       overview,
       traceability: {
-        source: 'Tenant-scoped customers and financially successful transactions',
+        source: masterId ? `Master ${masterId}: customers and financially successful transactions within this company` : 'Tenant-scoped customers and financially successful transactions',
         companyPlFormula: 'Successful deposits - successful withdrawals',
         comparison: overview.label,
       },

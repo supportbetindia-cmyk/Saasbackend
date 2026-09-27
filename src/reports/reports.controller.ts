@@ -1,4 +1,5 @@
-import { BadRequestException, Controller, Get, Param, UseGuards } from '@nestjs/common';
+import { BadRequestException, Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
+import { MasterIdPipe } from '../customers/master-scope';
 import { AuthGuard } from '../auth/auth.guard';
 import { TenantGuard } from '../auth/tenant.guard';
 import { PermissionsGuard, RequirePermissions } from '../auth/permissions.guard';
@@ -14,8 +15,8 @@ export class ReportsController {
   constructor(private readonly reports: ReportsService) {}
 
   @Get(':type')
-  get(@CurrentTenant() tenant: ActiveTenant, @Param('type') type: string) {
+  get(@CurrentTenant() tenant: ActiveTenant, @Param('type') type: string, @Query('masterId', MasterIdPipe) masterId?: string) {
     if (!['daily', 'weekly', 'monthly'].includes(type)) throw new BadRequestException('type must be daily, weekly or monthly');
-    return this.reports.get(tenant.id, type as ReportType);
+    return this.reports.get(tenant.id, type as ReportType, masterId);
   }
 }

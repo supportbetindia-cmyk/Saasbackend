@@ -22,10 +22,10 @@ export class AllocationsService {
   }
 
   /** Lines + live ₹ split of Company P/L for the period, with the 100% check (PRD 13). */
-  async plan(tenantId: string, period: PeriodKey) {
+  async plan(tenantId: string, period: PeriodKey, masterId?: string) {
     const [lines, overview] = await Promise.all([
       this.prisma.allocation.findMany({ where: { tenantId }, orderBy: { createdAt: 'asc' } }),
-      this.dashboard.overview(tenantId, period),
+      this.dashboard.overview(tenantId, period, undefined, undefined, masterId),
     ]);
     const distributable = overview.kpis.companyPl.current;
     const totalPercent = Math.round(lines.reduce((s, l) => s + Number(l.percent), 0) * 100) / 100;

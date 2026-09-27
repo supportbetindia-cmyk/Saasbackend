@@ -3,6 +3,7 @@ import { Prisma, type TransactionType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CustomersService } from '../customers/customers.service';
 import { normalizeStatus, normalizeType } from './status';
+import { transactionScope } from '../customers/master-scope';
 
 export type IngestInput = {
   // customer identity (a customer is upserted from these)
@@ -105,9 +106,9 @@ export class TransactionsService {
   /** KPI summary + recent rows for a tenant, within [from, to) by occurredAt.
    * Powers the Transactions page — replaces the old BetIndia-only Supabase read
    * so each company sees ITS OWN transactions. `from` null = all time. */
-  async summary(tenantId: string, fromMs: number | null, toMs: number) {
+  async summary(tenantId: string, fromMs: number | null, toMs: number, masterId?: string) {
     const where: Prisma.TransactionWhereInput = {
-      tenantId,
+      ...transactionScope(tenantId, masterId),
       occurredAt: { ...(fromMs != null ? { gte: new Date(fromMs) } : {}), lt: new Date(toMs) },
     };
 
@@ -162,12 +163,12 @@ export class TransactionsService {
     return { summary, recent };
   }
 
-  async list(tenantId: string, opts: { type?: string; status?: string; search?: string; page?: number; pageSize?: number }) {
+  async list(tenantId: string, opts: { type?: string; status?: string; search?: string; page?: number; pageSize?: number; masterId?: string }) {
     const page = Math.max(1, opts.page ?? 1);
     const pageSize = Math.min(500, Math.max(1, opts.pageSize ?? 50));
     const type = normalizeType(opts.type);
     const where: Prisma.TransactionWhereInput = {
-      tenantId,
+      ...transactionScope(tenantId, opts.masterId),
       ...(type ? { transactionType: type as TransactionType } : {}),
       ...(opts.status ? { normalizedStatus: opts.status.toUpperCase() as never } : {}),
       ...(opts.search

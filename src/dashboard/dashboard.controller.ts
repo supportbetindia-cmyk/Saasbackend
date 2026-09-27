@@ -7,6 +7,7 @@ import { CurrentTenant } from '../auth/decorators';
 import type { ActiveTenant } from '../auth/auth.types';
 import { DashboardService } from './dashboard.service';
 import type { PeriodKey } from './periods';
+import { MasterIdPipe } from '../customers/master-scope';
 
 const PERIODS: PeriodKey[] = ['today', 'week', 'month', 'quarter', 'year', 'custom'];
 
@@ -22,9 +23,10 @@ export class DashboardController {
     @Query('period') period?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
+    @Query('masterId', MasterIdPipe) masterId?: string,
   ) {
     const key: PeriodKey = PERIODS.includes(period as PeriodKey) ? (period as PeriodKey) : 'month';
-    return this.dashboard.overview(tenant.id, key, from, to);
+    return this.dashboard.overview(tenant.id, key, from, to, masterId);
   }
 
   // The records behind one KPI card (metric = deposits|withdrawals|transactions|new|ftd|active).
@@ -36,8 +38,9 @@ export class DashboardController {
     @Query('period') period?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
+    @Query('masterId', MasterIdPipe) masterId?: string,
   ) {
     const key: PeriodKey = PERIODS.includes(period as PeriodKey) ? (period as PeriodKey) : 'month';
-    return this.dashboard.details(tenant.id, key, metric ?? 'deposits', from, to);
+    return this.dashboard.details(tenant.id, key, metric ?? 'deposits', from, to, masterId);
   }
 }

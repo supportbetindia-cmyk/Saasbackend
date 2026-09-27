@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { normalizePhone } from '../transactions/status';
+import { customerScope } from './master-scope';
 
 /** UTC instant of "today" midnight in the given IANA timezone (no DST inside a day for IST). */
 function startOfTodayUtc(tz: string): Date {
@@ -67,13 +68,13 @@ export class CustomersService {
 
   async list(
     tenantId: string,
-    opts: { search?: string; page?: number; pageSize?: number; missingRegistration?: boolean },
+    opts: { search?: string; page?: number; pageSize?: number; missingRegistration?: boolean; masterId?: string },
   ) {
     const page = Math.max(1, opts.page ?? 1);
     const pageSize = Math.min(200, Math.max(1, opts.pageSize ?? 50));
     const q = (opts.search ?? '').trim();
     const where = {
-      tenantId,
+      ...customerScope(tenantId, opts.masterId),
       ...(opts.missingRegistration ? { registrationAt: null } : {}),
       ...(q
         ? {
@@ -108,6 +109,15 @@ export class CustomersService {
     return { data: enriched, page, pageSize, total };
   }
 
+  async masters(tenantId: string): Promise<string[]> {
+    const rows = await this.prisma.$queryRaw<Array<{ master_id: string }>>`
+      select distinct master_id from saas.customers
+      where tenant_id = ${tenantId} and master_id is not null and master_id <> ''
+        and master_id <> 'statement-api' and master_id not like 'statement:%'
+      order by master_id`;
+    return rows.map((row) => row.master_id);
+  }
+
   /** Tenant timezone (falls back to Asia/Kolkata). */
   private async tenantTz(tenantId: string): Promise<string> {
     const t = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } });
@@ -135,8 +145,8 @@ export class CustomersService {
   }
 
   /** Customer 360: identity + financial aggregates derived from transactions. */
-  async get360(tenantId: string, customerId: string) {
-    const customer = await this.prisma.customer.findFirst({ where: { id: customerId, tenantId } });
+  async get360(tenantId: string, customerId: string, masterId?: string) {
+    const customer = await this.prisma.customer.findFirst({ where: { ...customerScope(tenantId, masterId), id: customerId } });
     if (!customer) throw new NotFoundException('Customer not found');
 
     // Lifecycle / value-tier change history (newest first) for this customer.
@@ -207,8 +217,8 @@ export class CustomersService {
     };
   }
 
-  async transactionsFor(tenantId: string, customerId: string, opts: { page?: number; pageSize?: number }) {
-    const exists = await this.prisma.customer.findFirst({ where: { id: customerId, tenantId }, select: { id: true } });
+  async transactionsFor(tenantId: string, customerId: string, opts: { page?: number; pageSize?: number }, masterId?: string) {
+    const exists = await this.prisma.customer.findFirst({ where: { ...customerScope(tenantId, masterId), id: customerId }, select: { id: true } });
     if (!exists) throw new NotFoundException('Customer not found');
     const page = Math.max(1, opts.page ?? 1);
     const pageSize = Math.min(500, Math.max(1, opts.pageSize ?? 100));

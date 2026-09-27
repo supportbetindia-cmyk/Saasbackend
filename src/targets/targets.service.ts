@@ -32,14 +32,14 @@ export class TargetsService {
   }
 
   /** All targets with live actual, remaining and achievement % (PRD 15). */
-  async listWithProgress(tenantId: string) {
+  async listWithProgress(tenantId: string, masterId?: string) {
     const targets = await this.prisma.target.findMany({ where: { tenantId }, orderBy: { metric: 'asc' } });
     if (targets.length === 0) return [];
 
     // One dashboard read per distinct period, then pull each metric's current value.
     const periods = [...new Set(targets.map((t) => t.period))] as PeriodKey[];
     const overviews = Object.fromEntries(
-      await Promise.all(periods.map(async (p) => [p, await this.dashboard.overview(tenantId, p)] as const)),
+      await Promise.all(periods.map(async (p) => [p, await this.dashboard.overview(tenantId, p, undefined, undefined, masterId)] as const)),
     );
 
     return targets.map((t) => {

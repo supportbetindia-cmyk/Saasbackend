@@ -1,4 +1,5 @@
-import { Body, Controller, Delete, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { MasterIdPipe } from '../customers/master-scope';
 import { IsIn, IsNumber, Min } from 'class-validator';
 import { AuthGuard } from '../auth/auth.guard';
 import { TenantGuard } from '../auth/tenant.guard';
@@ -22,8 +23,8 @@ export class TargetsController {
 
   @Get()
   @RequirePermissions(PERMISSIONS.targetsRead)
-  list(@CurrentTenant() tenant: ActiveTenant) {
-    return this.targets.listWithProgress(tenant.id);
+  list(@CurrentTenant() tenant: ActiveTenant, @Query('masterId', MasterIdPipe) masterId?: string) {
+    return this.targets.listWithProgress(tenant.id, masterId);
   }
 
   @Post()

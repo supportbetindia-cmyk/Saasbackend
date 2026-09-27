@@ -9,6 +9,7 @@ import type { ActiveTenant, AuthUser } from '../auth/auth.types';
 import { AuditService } from '../audit/audit.service';
 import { AllocationsService } from './allocations.service';
 import type { PeriodKey } from '../dashboard/periods';
+import { MasterIdPipe } from '../customers/master-scope';
 
 const PERIODS: PeriodKey[] = ['today', 'week', 'month', 'quarter', 'year'];
 
@@ -29,9 +30,9 @@ export class AllocationsController {
 
   @Get()
   @RequirePermissions(PERMISSIONS.allocationsRead)
-  plan(@CurrentTenant() tenant: ActiveTenant, @Query('period') period?: string) {
+  plan(@CurrentTenant() tenant: ActiveTenant, @Query('period') period?: string, @Query('masterId', MasterIdPipe) masterId?: string) {
     const key: PeriodKey = PERIODS.includes(period as PeriodKey) ? (period as PeriodKey) : 'month';
-    return this.allocations.plan(tenant.id, key);
+    return this.allocations.plan(tenant.id, key, masterId);
   }
 
   @Post()

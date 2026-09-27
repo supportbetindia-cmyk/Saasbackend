@@ -8,6 +8,7 @@ import { CurrentTenant, CurrentUser } from '../auth/decorators';
 import type { ActiveTenant, AuthUser } from '../auth/auth.types';
 import { CustomersService } from './customers.service';
 import { AuditService } from '../audit/audit.service';
+import { MasterIdPipe } from './master-scope';
 
 class CreateCustomerDto {
   @IsOptional() @IsString() externalUserId?: string;
@@ -34,13 +35,21 @@ export class CustomersController {
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
     @Query('missingRegistration') missingRegistration?: string,
+    @Query('masterId', MasterIdPipe) masterId?: string,
   ) {
     return this.customers.list(tenant.id, {
       search,
+      masterId,
       page: Number(page) || undefined,
       pageSize: Number(pageSize) || undefined,
       missingRegistration: missingRegistration === 'true',
     });
+  }
+
+  @Get('masters')
+  @RequirePermissions(PERMISSIONS.customersRead)
+  masters(@CurrentTenant() tenant: ActiveTenant) {
+    return this.customers.masters(tenant.id);
   }
 
   @Post()
@@ -56,8 +65,8 @@ export class CustomersController {
 
   @Get(':id')
   @RequirePermissions(PERMISSIONS.customersRead)
-  get360(@CurrentTenant() tenant: ActiveTenant, @Param('id') id: string) {
-    return this.customers.get360(tenant.id, id);
+  get360(@CurrentTenant() tenant: ActiveTenant, @Param('id') id: string, @Query('masterId', MasterIdPipe) masterId?: string) {
+    return this.customers.get360(tenant.id, id, masterId);
   }
 
   @Get(':id/transactions')
@@ -67,7 +76,8 @@ export class CustomersController {
     @Param('id') id: string,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
+    @Query('masterId', MasterIdPipe) masterId?: string,
   ) {
-    return this.customers.transactionsFor(tenant.id, id, { page: Number(page) || undefined, pageSize: Number(pageSize) || undefined });
+    return this.customers.transactionsFor(tenant.id, id, { page: Number(page) || undefined, pageSize: Number(pageSize) || undefined }, masterId);
   }
 }
