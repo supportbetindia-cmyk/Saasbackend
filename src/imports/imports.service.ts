@@ -96,7 +96,7 @@ export class ImportsService {
               last_withdrawal_amount)
       where t.external_user_id is not null and btrim(t.external_user_id) <> ''
       on conflict (tenant_id, external_user_id) do update set
-        master_id        = excluded.master_id,
+        master_id        = coalesce(nullif(excluded.master_id, ''), saas.customers.master_id),
         name             = coalesce(excluded.name, saas.customers.name),
         phone            = excluded.phone,
         phone_normalized = excluded.phone_normalized,
@@ -183,7 +183,7 @@ export class ImportsService {
         order by user_id, created_at desc
       ) u
       on conflict (tenant_id, external_user_id) do update set
-        master_id        = excluded.master_id,
+        master_id        = coalesce(nullif(excluded.master_id, ''), saas.customers.master_id),
         name             = coalesce(excluded.name, saas.customers.name),
         phone            = excluded.phone,
         phone_normalized = excluded.phone_normalized,
