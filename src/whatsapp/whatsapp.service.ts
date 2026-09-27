@@ -14,9 +14,12 @@ export class WhatsappService {
   private async config(tenantId: string): Promise<{ apiKey?: string; templates: Templates }> {
     const envKey = process.env.INTERAKT_API_KEY;
     try {
+      // Use the tenant's transaction account: prefer the 'updates' role, else any
+      // enabled account that has a key. (Templates still key off deposit_approved etc.)
       const rows = await this.prisma.$queryRawUnsafe<{ api_key: string | null; templates: Record<string, string> | null }[]>(
         `select api_key, templates from public.whatsapp_settings
-          where tenant_id = $1 and role = 'updates' and enabled = true limit 1`,
+          where tenant_id = $1 and enabled = true and api_key is not null and api_key <> ''
+          order by (role = 'updates') desc limit 1`,
         tenantId,
       );
       const row = rows[0];
