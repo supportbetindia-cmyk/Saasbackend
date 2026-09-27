@@ -36,6 +36,9 @@ export class WebhooksController {
     this.checkRateLimit(tenant.id);
     if (!verifyWebhookSecret(headerSecret || token, tenant.webhookSecretHash)) throw new UnauthorizedException('Invalid webhook secret');
 
+    // Log the raw payload for visibility/debugging (best-effort; never fails the webhook).
+    this.logRaw(rawType, body);
+
     // "update" doesn't say deposit vs withdrawal — work it out.
     const type = await this.resolveType(rawType, body, tenant.id);
 
@@ -96,6 +99,16 @@ export class WebhooksController {
     }
     const hasBankFields = Boolean(body.Account_number ?? body.account_number ?? body.Ifsc_code ?? body.ifsc_code);
     return hasBankFields ? 'withdrawal' : 'deposit';
+  }
+
+  /** Store the raw incoming payload in public.webhook_logs so it's viewable later
+   * (same table the legacy webhook used). Best-effort — never throws. */
+  private logRaw(source: string, body: Record<string, unknown>) {
+    this.prisma.$executeRawUnsafe(
+      `insert into public.webhook_logs (source, method, content_type, token_ok, status, raw, created_at)
+       values ($1, 'POST', 'application/json', true, 200, $2::jsonb, now())`,
+      source, JSON.stringify(body),
+    ).catch(() => undefined);
   }
 
   private checkRateLimit(tenantId: string) {
