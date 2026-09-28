@@ -85,7 +85,32 @@ export class TransactionsService {
     }
 
     if (type === 'DEPOSIT') await this.recomputeFtd(tenantId, customer.id);
+    // Keep the "last deposit/withdrawal" marker live from webhooks (the imported
+    // legacy aggregates froze once and never refresh on their own).
+    await this.recomputeLastActivity(tenantId, customer.id, type);
     return txn;
+  }
+
+  /** Move the customer's last-deposit / last-withdrawal marker FORWARD to the newest
+   * successful transaction. Forward-only: never moves it backward, because the
+   * lifetime totals were imported from the legacy users table and stay authoritative —
+   * we only refresh the "most recent activity" the live webhook now knows about. */
+  async recomputeLastActivity(tenantId: string, customerId: string, type: 'DEPOSIT' | 'WITHDRAWAL'): Promise<void> {
+    const last = await this.prisma.transaction.findFirst({
+      where: { tenantId, customerId, transactionType: type, isFinanciallySuccessful: true },
+      orderBy: { occurredAt: 'desc' },
+    });
+    if (!last) return;
+    const c = await this.prisma.customer.findUnique({
+      where: { id: customerId }, select: { lastDepositAt: true, lastWithdrawalAt: true },
+    });
+    if (type === 'DEPOSIT') {
+      if (!c?.lastDepositAt || c.lastDepositAt < last.occurredAt) {
+        await this.prisma.customer.update({ where: { id: customerId }, data: { lastDepositAt: last.occurredAt, lastDepositAmount: last.amount } });
+      }
+    } else if (!c?.lastWithdrawalAt || c.lastWithdrawalAt < last.occurredAt) {
+      await this.prisma.customer.update({ where: { id: customerId }, data: { lastWithdrawalAt: last.occurredAt, lastWithdrawalAmount: last.amount } });
+    }
   }
 
   async recomputeFtd(tenantId: string, customerId: string): Promise<void> {
