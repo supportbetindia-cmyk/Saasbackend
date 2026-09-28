@@ -245,6 +245,24 @@ model Target {
   @@schema("saas")
 }
 
+// Department budget vs actual per period (PRD 14). One row per (department, period) so
+// prior-period records are never overwritten. Queried via raw SQL in BudgetsService.
+model Budget {
+  id           String   @id @default(uuid())
+  tenantId     String   @map("tenant_id")
+  departmentId String   @map("department_id")
+  period       String   // YYYY-MM
+  budgetAmount Decimal  @default(0) @map("budget_amount") @db.Decimal(18, 2)
+  actualAmount Decimal  @default(0) @map("actual_amount") @db.Decimal(18, 2)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@unique([tenantId, departmentId, period])
+  @@index([tenantId, period])
+  @@map("budgets")
+  @@schema("saas")
+}
+
 // Profit distribution lines (PRD 13): departments + a retained line, each a % of the
 // distributable amount. Changes are audited via audit_logs (no bespoke history table).
 model Allocation {

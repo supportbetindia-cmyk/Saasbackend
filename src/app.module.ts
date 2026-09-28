@@ -15,6 +15,7 @@ import { TargetsModule } from './targets/targets.module';
 import { AllocationsModule } from './allocations/allocations.module';
 import { ReportsModule } from './reports/reports.module';
 import { DepartmentsModule } from './departments/departments.module';
+import { BudgetsModule } from './budgets/budgets.module';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { DepartmentsModule } from './departments/departments.module';
     AllocationsModule,
     ReportsModule,
     DepartmentsModule,
+    BudgetsModule,
   ],
 })
 export class AppModule {}
