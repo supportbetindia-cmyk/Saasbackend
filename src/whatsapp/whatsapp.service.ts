@@ -18,7 +18,7 @@ export class WhatsappService {
       // enabled account that has a key. (Templates still key off deposit_approved etc.)
       const rows = await this.prisma.$queryRawUnsafe<{ api_key: string | null; templates: Record<string, string> | null }[]>(
         `select api_key, templates from public.whatsapp_settings
-          where tenant_id = $1 and enabled = true and api_key is not null and api_key <> ''
+          where tenant_id = $1::uuid and enabled = true and api_key is not null and api_key <> ''
           order by (role = 'updates') desc limit 1`,
         tenantId,
       );
@@ -43,17 +43,37 @@ export class WhatsappService {
       const msg = buildTransactionMessage(type, body, templates);
       if (!msg || !msg.templateName) return; // no phone / no template
 
-      // Claim the event first; if the row already exists, it was already sent.
+      const s = (v: unknown) => (v === undefined || v === null ? '' : String(v).trim());
+      const userId = s(body.user_id ?? body.User_id);
+      const txnId = s(body.Transaction_id ?? body.transaction_id);
+      const status = s(body.payment_status ?? body.Payment_status ?? body.status ?? body.Status);
+
+      // Claim + record the send in public.message_log (event_key is unique → this is
+      // both the dedup guard AND the row the Automations page shows). If the row
+      // already exists, this transaction+status was already messaged.
       const inserted = await this.prisma.$executeRawUnsafe(
-        `insert into saas.whatsapp_log (id, tenant_id, event_key, created_at)
-         values (gen_random_uuid()::text, $1, $2, now())
-         on conflict (tenant_id, event_key) do nothing`,
-        tenantId, msg.eventKey,
+        `insert into public.message_log
+           (event_key, channel, template, event_type, transaction_id, transaction_status, mobile, user_id, payload, status, tenant_id)
+         values ($1,'whatsapp',$2,$3,$4,$5,$6,$7,$8::jsonb,'queued',$9::uuid)
+         on conflict (event_key) do nothing`,
+        msg.eventKey, msg.templateName, type, txnId || null, status || null,
+        msg.phoneNumber, userId || null, JSON.stringify(body), tenantId,
       );
       if (inserted === 0) return; // duplicate — already messaged
 
       const res = await sendWhatsAppTemplate(msg, apiKey);
-      if (!res.ok) this.logger.warn(`send failed (${type} → ${msg.templateName}): ${res.error}`);
+      if (res.ok) {
+        await this.prisma.$executeRawUnsafe(
+          `update public.message_log set status='sent', sent_at=now(), provider_message_id=$2, updated_at=now() where event_key=$1`,
+          msg.eventKey, res.id ?? null,
+        );
+      } else {
+        await this.prisma.$executeRawUnsafe(
+          `update public.message_log set status='failed', last_error=$2, attempt_count=attempt_count+1, updated_at=now() where event_key=$1`,
+          msg.eventKey, res.error ?? 'send failed',
+        );
+        this.logger.warn(`send failed (${type} → ${msg.templateName}): ${res.error}`);
+      }
     } catch (e) {
       this.logger.warn(`notifyTransaction error: ${e instanceof Error ? e.message : String(e)}`);
     }
