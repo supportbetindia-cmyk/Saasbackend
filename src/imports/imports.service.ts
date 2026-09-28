@@ -111,10 +111,20 @@ export class ImportsService {
         withdrawal_count = coalesce(excluded.withdrawal_count, saas.customers.withdrawal_count),
         net_pnl          = coalesce(excluded.net_pnl, saas.customers.net_pnl),
         total_bonus      = coalesce(excluded.total_bonus, saas.customers.total_bonus),
-        last_deposit_at  = coalesce(excluded.last_deposit_at, saas.customers.last_deposit_at),
-        last_deposit_amount = coalesce(excluded.last_deposit_amount, saas.customers.last_deposit_amount),
-        last_withdrawal_at = coalesce(excluded.last_withdrawal_at, saas.customers.last_withdrawal_at),
-        last_withdrawal_amount = coalesce(excluded.last_withdrawal_amount, saas.customers.last_withdrawal_amount),
+        -- Forward-only: don't let an older CSV snapshot move the last-deposit/withdrawal
+        -- marker backward over what live webhooks already recorded.
+        last_deposit_at  = case when excluded.last_deposit_at is not null
+             and (saas.customers.last_deposit_at is null or excluded.last_deposit_at > saas.customers.last_deposit_at)
+          then excluded.last_deposit_at else saas.customers.last_deposit_at end,
+        last_deposit_amount = case when excluded.last_deposit_at is not null
+             and (saas.customers.last_deposit_at is null or excluded.last_deposit_at > saas.customers.last_deposit_at)
+          then excluded.last_deposit_amount else saas.customers.last_deposit_amount end,
+        last_withdrawal_at = case when excluded.last_withdrawal_at is not null
+             and (saas.customers.last_withdrawal_at is null or excluded.last_withdrawal_at > saas.customers.last_withdrawal_at)
+          then excluded.last_withdrawal_at else saas.customers.last_withdrawal_at end,
+        last_withdrawal_amount = case when excluded.last_withdrawal_at is not null
+             and (saas.customers.last_withdrawal_at is null or excluded.last_withdrawal_at > saas.customers.last_withdrawal_at)
+          then excluded.last_withdrawal_amount else saas.customers.last_withdrawal_amount end,
         updated_at       = now();
     `;
     const processed = await this.prisma.$executeRawUnsafe(
@@ -198,10 +208,20 @@ export class ImportsService {
         withdrawal_count = excluded.withdrawal_count,
         net_pnl          = excluded.net_pnl,
         total_bonus      = excluded.total_bonus,
-        last_deposit_at  = excluded.last_deposit_at,
-        last_deposit_amount = excluded.last_deposit_amount,
-        last_withdrawal_at = excluded.last_withdrawal_at,
-        last_withdrawal_amount = excluded.last_withdrawal_amount,
+        -- Forward-only: the legacy users table is a frozen snapshot; never move the
+        -- last-deposit/withdrawal marker BACKWARD over what live webhooks recorded.
+        last_deposit_at  = case when excluded.last_deposit_at is not null
+             and (saas.customers.last_deposit_at is null or excluded.last_deposit_at > saas.customers.last_deposit_at)
+          then excluded.last_deposit_at else saas.customers.last_deposit_at end,
+        last_deposit_amount = case when excluded.last_deposit_at is not null
+             and (saas.customers.last_deposit_at is null or excluded.last_deposit_at > saas.customers.last_deposit_at)
+          then excluded.last_deposit_amount else saas.customers.last_deposit_amount end,
+        last_withdrawal_at = case when excluded.last_withdrawal_at is not null
+             and (saas.customers.last_withdrawal_at is null or excluded.last_withdrawal_at > saas.customers.last_withdrawal_at)
+          then excluded.last_withdrawal_at else saas.customers.last_withdrawal_at end,
+        last_withdrawal_amount = case when excluded.last_withdrawal_at is not null
+             and (saas.customers.last_withdrawal_at is null or excluded.last_withdrawal_at > saas.customers.last_withdrawal_at)
+          then excluded.last_withdrawal_amount else saas.customers.last_withdrawal_amount end,
         updated_at       = now();
     `;
     const processed = await this.prisma.$executeRawUnsafe(sql, tenantId, legacyTenant.id);
