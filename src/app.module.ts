@@ -17,6 +17,7 @@ import { ReportsModule } from './reports/reports.module';
 import { DepartmentsModule } from './departments/departments.module';
 import { BudgetsModule } from './budgets/budgets.module';
 import { WinbackModule } from './winback/winback.module';
+import { LifecycleModule } from './lifecycle/lifecycle.module';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { WinbackModule } from './winback/winback.module';
     DepartmentsModule,
     BudgetsModule,
     WinbackModule,
+    LifecycleModule,
   ],
 })
 export class AppModule {}

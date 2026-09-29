@@ -1,6 +1,7 @@
 import { Injectable, Logger, type OnApplicationBootstrap, type OnModuleDestroy } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ClassificationService } from '../classification/classification.service';
+import { LifecycleService } from '../lifecycle/lifecycle.service';
 import { ImportsService } from './imports.service';
 
 const INTERVAL_MS = 120_000; // ponytail: fixed 2-min poll; make env-driven if a tenant needs faster.
@@ -20,6 +21,7 @@ export class LiveSyncService implements OnApplicationBootstrap, OnModuleDestroy 
     private readonly prisma: PrismaService,
     private readonly imports: ImportsService,
     private readonly classification: ClassificationService,
+    private readonly lifecycle: LifecycleService,
   ) {}
 
   onApplicationBootstrap() {
@@ -44,6 +46,7 @@ export class LiveSyncService implements OnApplicationBootstrap, OnModuleDestroy 
           await this.imports.importLegacyCustomers(t.id, t.name);
           await this.imports.importLegacyTransactions(t.id, t.name);
           await this.classification.recomputeTenant(t.id);
+          await this.lifecycle.recomputeTenant(t.id);
         } catch (err) {
           this.log.debug(`skip ${t.name}: ${err instanceof Error ? err.message : err}`);
         }
