@@ -21,11 +21,9 @@ export class WinbackScheduler implements OnApplicationBootstrap, OnModuleDestroy
   ) {}
 
   onApplicationBootstrap() {
-    if (process.env.WINBACK_DISABLED === '1') return;
-    setTimeout(() => {
-      void this.runAll();
-      this.timer = setInterval(() => void this.runAll(), INTERVAL_MS);
-    }, FIRST_RUN_DELAY_MS);
+    // Retired: superseded by the lifecycle sender, which owns the INACTIVE stage too.
+    // Disabled here to avoid double-messaging. Re-enable only if you drop the lifecycle
+    // sender. The manual /winback/preview and /winback/run endpoints still work.
   }
 
   onModuleDestroy() {

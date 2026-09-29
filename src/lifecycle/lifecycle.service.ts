@@ -52,7 +52,11 @@ export class LifecycleService {
         returning 1
       )
       update saas.customers c
-      set current_stage = r.new_stage, stage_changed_at = now(), updated_at = now()
+      set current_stage = r.new_stage, stage_changed_at = now(),
+          -- Cancel-on-transition: a new stage starts its follow-ups from zero, so
+          -- old-stage nudges stop and the new stage isn't already "capped".
+          follow_up_count = 0,
+          updated_at = now()
       from resolved r
       where c.id = r.id and r.new_stage is distinct from c.current_stage;
     `;

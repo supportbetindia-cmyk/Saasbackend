@@ -7,11 +7,16 @@ import { CurrentTenant, CurrentUser } from '../auth/decorators';
 import type { ActiveTenant, AuthUser } from '../auth/auth.types';
 import { AuditService } from '../audit/audit.service';
 import { LifecycleService } from './lifecycle.service';
+import { LifecycleSenderService } from './lifecycle-sender.service';
 
 @Controller('lifecycle')
 @UseGuards(AuthGuard, TenantGuard, PermissionsGuard)
 export class LifecycleController {
-  constructor(private readonly lifecycle: LifecycleService, private readonly audit: AuditService) {}
+  constructor(
+    private readonly lifecycle: LifecycleService,
+    private readonly sender: LifecycleSenderService,
+    private readonly audit: AuditService,
+  ) {}
 
   // How many customers are in each stage right now.
   @Get('summary')
@@ -28,6 +33,25 @@ export class LifecycleController {
     await this.audit.log({
       tenantId: tenant.id, actorUserId: user.id, action: 'lifecycle.recomputed',
       entityType: 'lifecycle', newValue: result,
+    });
+    return result;
+  }
+
+  // Eligible customers per stage right now (no sending).
+  @Get('send/preview')
+  @RequirePermissions(PERMISSIONS.whatsappRead)
+  sendPreview(@CurrentTenant() tenant: ActiveTenant) {
+    return this.sender.preview(tenant.id);
+  }
+
+  // Send this run's due lifecycle messages now (respects cooldown + caps).
+  @Post('send/run')
+  @RequirePermissions(PERMISSIONS.whatsappManage)
+  async sendRun(@CurrentTenant() tenant: ActiveTenant, @CurrentUser() user: AuthUser) {
+    const result = await this.sender.runTenant(tenant.id);
+    await this.audit.log({
+      tenantId: tenant.id, actorUserId: user.id, action: 'lifecycle.send_run',
+      entityType: 'lifecycle', newValue: result as unknown as Record<string, unknown>,
     });
     return result;
   }
