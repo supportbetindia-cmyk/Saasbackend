@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { normalizePhone } from '../whatsapp/message';
 import { sendWhatsAppTemplate } from '../whatsapp/interakt';
+import { LifecycleService } from './lifecycle.service';
 
 // Which Interakt template each stage sends (the doc's primary template per stage).
 // ACTIVE is null = we don't auto-market active players by default. A tenant can
@@ -17,9 +18,7 @@ const STAGE_TEMPLATES: Record<string, string | null> = {
   REACTIVATED: 'welcome_back',
 };
 
-const COOLDOWN_DAYS = 7;        // don't message the same player again within this
-const MAX_FOLLOWUPS = 3;        // per stage, then stop until they move stage
-const CAP = 200;                // per stage per run (deliverability)
+const CAP = 200;                // per stage per run (deliverability); not user-tunable
 
 export type StageResult = { stage: string; template: string; eligible: number; sent: number; failed: number; skipped: number };
 
@@ -28,7 +27,7 @@ type Candidate = { id: string; name: string | null; phone: string | null; userId
 @Injectable()
 export class LifecycleSenderService {
   private readonly log = new Logger('Lifecycle');
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly lifecycle: LifecycleService) {}
 
   /** The retention account's key + optional per-stage template overrides. Gated on
    * the account being ENABLED — that checkbox is the on/off switch. */
@@ -51,8 +50,9 @@ export class LifecycleSenderService {
     }
   }
 
-  /** Customers in a stage who pass every suppression rule and are due a message. */
-  private async eligible(tenantId: string, stage: string): Promise<Candidate[]> {
+  /** Customers in a stage who pass every suppression rule and are due a message.
+   * cooldownDays/maxFollowups come from the tenant's (validated) config. */
+  private async eligible(tenantId: string, stage: string, cooldownDays: number, maxFollowups: number): Promise<Candidate[]> {
     return this.prisma.$queryRawUnsafe<Candidate[]>(
       `select id, name, phone, external_user_id as "userId"
        from saas.customers
@@ -61,8 +61,8 @@ export class LifecycleSenderService {
          and phone is not null and phone <> ''
          and marketing_opt_out = false
          and support_issue_open = false
-         and follow_up_count < ${MAX_FOLLOWUPS}
-         and (last_template_sent_at is null or last_template_sent_at < now() - interval '${COOLDOWN_DAYS} days')
+         and follow_up_count < ${maxFollowups}
+         and (last_template_sent_at is null or last_template_sent_at < now() - interval '${cooldownDays} days')
        order by last_template_sent_at asc nulls first
        limit ${CAP}`,
       tenantId, stage,
@@ -70,8 +70,8 @@ export class LifecycleSenderService {
   }
 
   /** Send one stage's template to its eligible customers. */
-  async sendStage(tenantId: string, stage: string, apiKey: string, templateName: string, lang: string): Promise<StageResult> {
-    const players = await this.eligible(tenantId, stage);
+  async sendStage(tenantId: string, stage: string, apiKey: string, templateName: string, lang: string, cooldownDays: number, maxFollowups: number): Promise<StageResult> {
+    const players = await this.eligible(tenantId, stage, cooldownDays, maxFollowups);
     let sent = 0, failed = 0, skipped = 0;
     for (const p of players) {
       const phone = normalizePhone(p.phone ?? '');
@@ -120,12 +120,13 @@ export class LifecycleSenderService {
   async runTenant(tenantId: string): Promise<{ configured: boolean; results: StageResult[] }> {
     const { apiKey, templates, lang } = await this.config(tenantId);
     if (!apiKey) return { configured: false, results: [] };
+    const cfg = await this.lifecycle.getConfig(tenantId);
 
     const results: StageResult[] = [];
     for (const [stage, defaultTemplate] of Object.entries(STAGE_TEMPLATES)) {
       const templateName = templates[stage] || defaultTemplate; // tenant override, else default
       if (!templateName) continue; // ACTIVE (null) or nothing configured → skip
-      const r = await this.sendStage(tenantId, stage, apiKey, templateName, lang);
+      const r = await this.sendStage(tenantId, stage, apiKey, templateName, lang, cfg.cooldownDays, cfg.maxFollowups);
       if (r.sent || r.failed) {
         this.log.log(`${tenantId} ${stage}: sent ${r.sent}, failed ${r.failed} (${templateName})`);
       }
@@ -137,10 +138,11 @@ export class LifecycleSenderService {
   /** Eligible counts per stage, no sending (for the UI). */
   async preview(tenantId: string): Promise<{ configured: boolean; stages: { stage: string; template: string | null; eligible: number }[] }> {
     const { apiKey, templates } = await this.config(tenantId);
+    const cfg = await this.lifecycle.getConfig(tenantId);
     const stages = [];
     for (const [stage, defaultTemplate] of Object.entries(STAGE_TEMPLATES)) {
       const template = templates[stage] || defaultTemplate;
-      const eligible = template ? (await this.eligible(tenantId, stage)).length : 0;
+      const eligible = template ? (await this.eligible(tenantId, stage, cfg.cooldownDays, cfg.maxFollowups)).length : 0;
       stages.push({ stage, template, eligible });
     }
     return { configured: Boolean(apiKey), stages };

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Put, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../auth/auth.guard';
 import { TenantGuard } from '../auth/tenant.guard';
 import { PermissionsGuard, RequirePermissions } from '../auth/permissions.guard';
@@ -35,6 +35,24 @@ export class LifecycleController {
       entityType: 'lifecycle', newValue: result,
     });
     return result;
+  }
+
+  // The tenant's editable lifecycle thresholds.
+  @Get('config')
+  @RequirePermissions(PERMISSIONS.customersRead)
+  getConfig(@CurrentTenant() tenant: ActiveTenant) {
+    return this.lifecycle.getConfig(tenant.id);
+  }
+
+  @Put('config')
+  @RequirePermissions(PERMISSIONS.customersWrite)
+  async saveConfig(@CurrentTenant() tenant: ActiveTenant, @CurrentUser() user: AuthUser, @Body() body: unknown) {
+    const cfg = await this.lifecycle.saveConfig(tenant.id, body);
+    await this.audit.log({
+      tenantId: tenant.id, actorUserId: user.id, action: 'lifecycle.config_updated',
+      entityType: 'lifecycle', newValue: cfg as unknown as Record<string, unknown>,
+    });
+    return cfg;
   }
 
   // Eligible customers per stage right now (no sending).

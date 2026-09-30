@@ -1,27 +1,44 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-
-// Placeholder thresholds — a later phase makes these per-tenant configurable.
-const INACTIVE_DAYS = 30;      // no deposit/withdrawal for this long → INACTIVE
-const FTD_NO_REPEAT_DAYS = 7;  // one deposit and no repeat within this → FTD_NO_REPEAT
+import { LIFECYCLE_CONFIG, parseLifecycleConfig, type LifecycleConfig } from './lifecycle.config';
 
 @Injectable()
 export class LifecycleService {
   constructor(private readonly prisma: PrismaService) {}
+
+  /** The tenant's saved thresholds, or the code defaults. Values are always safe
+   * positive ints (parseLifecycleConfig), so they're OK to interpolate into SQL. */
+  async getConfig(tenantId: string): Promise<LifecycleConfig> {
+    const rows = await this.prisma.$queryRawUnsafe<{ lifecycle_config: unknown }[]>(
+      `select lifecycle_config from saas.tenants where id = $1`, tenantId,
+    );
+    const saved = rows[0]?.lifecycle_config;
+    return saved ? parseLifecycleConfig(saved) : LIFECYCLE_CONFIG;
+  }
+
+  /** Save (validated) thresholds for a tenant and return the normalized config. */
+  async saveConfig(tenantId: string, input: unknown): Promise<LifecycleConfig> {
+    const cfg = parseLifecycleConfig(input);
+    await this.prisma.$executeRawUnsafe(
+      `update saas.tenants set lifecycle_config = $2::jsonb, updated_at = now() where id = $1`,
+      tenantId, JSON.stringify(cfg),
+    );
+    return cfg;
+  }
 
   /**
    * SQL CASE deriving a customer's BASE lifecycle stage from stored fields. First
    * match wins, so order matters. Produces 6 stages; REACTIVATED is a transition,
    * layered on in recompute() (you can't see it from current state alone).
    */
-  private stageCase(): string {
+  private stageCase(cfg: LifecycleConfig): string {
     return `case
       when registration_at is null then 'LEAD'
       when coalesce(deposit_count, 0) = 0 then 'REGISTERED_NO_FTD'
       when greatest(last_deposit_at, last_withdrawal_at) is not null
-        and now() - greatest(last_deposit_at, last_withdrawal_at) > interval '${INACTIVE_DAYS} days' then 'INACTIVE'
+        and now() - greatest(last_deposit_at, last_withdrawal_at) > interval '${cfg.inactiveDays} days' then 'INACTIVE'
       when deposit_count = 1 and ftd_date is not null
-        and now() - ftd_date <= interval '${FTD_NO_REPEAT_DAYS} days' then 'FTD'
+        and now() - ftd_date <= interval '${cfg.ftdNoRepeatDays} days' then 'FTD'
       when deposit_count = 1 then 'FTD_NO_REPEAT'
       else 'ACTIVE'
     end`;
@@ -30,10 +47,10 @@ export class LifecycleService {
   /** The writable CTE that reclassifies a scope of customers: compute base stage,
    * resolve the REACTIVATED transition, log every change to classification_events,
    * then write current_stage. `scope` limits which rows (whole tenant, or one id). */
-  private recomputeSql(scope: string): string {
+  private recomputeSql(scope: string, cfg: LifecycleConfig): string {
     return `
       with computed as (
-        select id, current_stage as old_stage, (${this.stageCase()}) as base_stage
+        select id, current_stage as old_stage, (${this.stageCase(cfg)}) as base_stage
         from saas.customers
         where ${scope}
       ),
@@ -64,14 +81,16 @@ export class LifecycleService {
 
   /** Recompute every customer in a tenant (daily job / manual). Idempotent. */
   async recomputeTenant(tenantId: string, reason = 'Auto recalculated'): Promise<{ changed: number }> {
-    const changed = await this.prisma.$executeRawUnsafe(this.recomputeSql('tenant_id = $1'), tenantId, reason);
+    const cfg = await this.getConfig(tenantId);
+    const changed = await this.prisma.$executeRawUnsafe(this.recomputeSql('tenant_id = $1', cfg), tenantId, reason);
     return { changed };
   }
 
   /** Recompute one customer (cheap — call from the webhook after a transaction). */
   async recomputeCustomer(tenantId: string, customerId: string): Promise<void> {
+    const cfg = await this.getConfig(tenantId);
     await this.prisma.$executeRawUnsafe(
-      this.recomputeSql('tenant_id = $1 and id = $3'), tenantId, 'webhook', customerId,
+      this.recomputeSql('tenant_id = $1 and id = $3', cfg), tenantId, 'webhook', customerId,
     );
   }
 
