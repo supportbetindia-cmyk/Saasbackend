@@ -57,7 +57,10 @@ export class WhatsappService {
          values ($1,'whatsapp',$2,$3,$4,$5,$6,$7,$8::jsonb,'queued',$9::uuid)
          on conflict (event_key) do nothing`,
         msg.eventKey, msg.templateName, type, txnId || null, status || null,
-        msg.phoneNumber, userId || null, JSON.stringify(body), tenantId,
+        msg.phoneNumber, userId || null,
+        // Keep the raw body (for the log view) and add the replay envelope for retries.
+        JSON.stringify({ ...body, send: { countryCode: msg.countryCode, languageCode: 'en', bodyValues: msg.bodyValues, role: 'updates' } }),
+        tenantId,
       );
       if (inserted === 0) return; // duplicate — already messaged
 
@@ -69,7 +72,8 @@ export class WhatsappService {
         );
       } else {
         await this.prisma.$executeRawUnsafe(
-          `update public.message_log set status='failed', last_error=$2, attempt_count=attempt_count+1, updated_at=now() where event_key=$1`,
+          `update public.message_log set status='failed', last_error=$2, attempt_count=attempt_count+1,
+             next_attempt_at=now() + interval '2 minutes', updated_at=now() where event_key=$1`,
           msg.eventKey, res.error ?? 'send failed',
         );
         this.logger.warn(`send failed (${type} → ${msg.templateName}): ${res.error}`);

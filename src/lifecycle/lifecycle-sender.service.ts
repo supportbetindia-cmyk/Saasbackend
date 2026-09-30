@@ -80,11 +80,15 @@ export class LifecycleSenderService {
         .update(`lifecycle|${stage}|${tenantId}|${p.userId || phone.phoneNumber}|${new Date().toISOString().slice(0, 10)}`)
         .digest('hex');
 
+      // payload.send is the replay envelope the retry worker uses if this send fails.
+      const payload = JSON.stringify({
+        send: { countryCode: phone.countryCode, languageCode: lang, bodyValues: [p.name || 'there'], role: 'retention' },
+      });
       const claimed = await this.prisma.$executeRawUnsafe(
         `insert into public.message_log (event_key, channel, template, event_type, mobile, user_id, payload, status, tenant_id)
-         values ($1,'whatsapp',$2,$3,$4,$5,'{}'::jsonb,'queued',$6::uuid)
+         values ($1,'whatsapp',$2,$3,$4,$5,$6::jsonb,'queued',$7::uuid)
          on conflict (event_key) do nothing`,
-        eventKey, templateName, `lifecycle:${stage}`, phone.phoneNumber, p.userId ?? null, tenantId,
+        eventKey, templateName, `lifecycle:${stage}`, phone.phoneNumber, p.userId ?? null, payload, tenantId,
       );
       if (claimed === 0) { skipped++; continue; }
 
@@ -108,7 +112,8 @@ export class LifecycleSenderService {
       } else {
         failed++;
         await this.prisma.$executeRawUnsafe(
-          `update public.message_log set status='failed', last_error=$2, attempt_count=attempt_count+1, updated_at=now() where event_key=$1`,
+          `update public.message_log set status='failed', last_error=$2, attempt_count=attempt_count+1,
+             next_attempt_at=now() + interval '2 minutes', updated_at=now() where event_key=$1`,
           eventKey, res.error ?? 'send failed',
         );
       }
