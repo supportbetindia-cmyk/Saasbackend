@@ -35,11 +35,15 @@ export class CustomersController {
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
     @Query('missingRegistration') missingRegistration?: string,
+    @Query('stage') stage?: string,
+    @Query('activity') activity?: string,
     @Query('masterId', MasterIdPipe) masterId?: string,
   ) {
     return this.customers.list(tenant.id, {
       search,
       masterId,
+      stage,
+      activity,
       page: Number(page) || undefined,
       pageSize: Number(pageSize) || undefined,
       missingRegistration: missingRegistration === 'true',

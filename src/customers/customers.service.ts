@@ -3,6 +3,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { normalizePhone } from '../transactions/status';
 import { customerScope } from './master-scope';
 
+// Mirrors INACTIVE_AFTER_DAYS in the dashboard's Players Status column — keep in sync.
+const ACTIVITY_INACTIVE_DAYS = 7;
+
 /** UTC instant of "today" midnight in the given IANA timezone (no DST inside a day for IST). */
 function startOfTodayUtc(tz: string): Date {
   const now = new Date();
@@ -13,6 +16,8 @@ function startOfTodayUtc(tz: string): Date {
   const msSinceLocalMidnight = ((get('hour') % 24) * 3600 + get('minute') * 60 + get('second')) * 1000 + now.getMilliseconds();
   return new Date(now.getTime() - msSinceLocalMidnight);
 }
+
+
 
 export type UpsertCustomerInput = {
   externalUserId?: string | null;
@@ -68,7 +73,7 @@ export class CustomersService {
 
   async list(
     tenantId: string,
-    opts: { search?: string; page?: number; pageSize?: number; missingRegistration?: boolean; masterId?: string },
+    opts: { search?: string; page?: number; pageSize?: number; missingRegistration?: boolean; masterId?: string; stage?: string; activity?: string },
   ) {
     const page = Math.max(1, opts.page ?? 1);
     const pageSize = Math.min(200, Math.max(1, opts.pageSize ?? 50));
@@ -89,10 +94,25 @@ export class CustomersService {
             { email: { equals: q, mode: 'insensitive' as const } },
             ...(digits.length >= 6 ? [{ phoneNormalized: { equals: digits } }] : []),
           ];
+    // Active/Inactive uses the same rule as the Players "Status" column: a player is
+    // inactive once their most recent transaction is older than 7 days (ACTIVITY_INACTIVE_DAYS).
+    const activeCutoff = new Date(Date.now() - ACTIVITY_INACTIVE_DAYS * 86_400_000);
+    const activityAnd =
+      opts.activity === 'active'
+        ? [{ OR: [{ lastDepositAt: { gte: activeCutoff } }, { lastWithdrawalAt: { gte: activeCutoff } }] }]
+        : opts.activity === 'inactive'
+          ? [
+              { OR: [{ lastDepositAt: { not: null } }, { lastWithdrawalAt: { not: null } }] }, // has some activity
+              { OR: [{ lastDepositAt: null }, { lastDepositAt: { lt: activeCutoff } }] },       // …but latest is
+              { OR: [{ lastWithdrawalAt: null }, { lastWithdrawalAt: { lt: activeCutoff } }] }, // …older than the cutoff
+            ]
+          : [];
     const where = {
       ...customerScope(tenantId, opts.masterId),
       ...(opts.missingRegistration ? { registrationAt: null } : {}),
+      ...(opts.stage ? { currentLifecycle: opts.stage } : {}),
       ...(searchOr.length ? { OR: searchOr } : {}),
+      ...(activityAnd.length ? { AND: activityAnd } : {}),
     };
     const [data, total] = await Promise.all([
       // Show players WITH money first (depositors have names, deposits and a value
