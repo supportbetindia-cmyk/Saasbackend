@@ -73,20 +73,26 @@ export class CustomersService {
     const page = Math.max(1, opts.page ?? 1);
     const pageSize = Math.min(200, Math.max(1, opts.pageSize ?? 50));
     const q = (opts.search ?? '').trim();
+    const digits = q.replace(/\D/g, '');
+  
+    const looksLikeName = q !== '' && /^[\p{L}\s.'-]+$/u.test(q);
+    const searchOr = !q
+      ? []
+      : looksLikeName
+        ? [
+            { name: { contains: q, mode: 'insensitive' as const } },
+            { email: { contains: q, mode: 'insensitive' as const } },
+          ]
+        : [
+            { externalUserId: { equals: q, mode: 'insensitive' as const } },
+            { masterId: { equals: q, mode: 'insensitive' as const } },
+            { email: { equals: q, mode: 'insensitive' as const } },
+            ...(digits.length >= 6 ? [{ phoneNormalized: { equals: digits } }] : []),
+          ];
     const where = {
       ...customerScope(tenantId, opts.masterId),
       ...(opts.missingRegistration ? { registrationAt: null } : {}),
-      ...(q
-        ? {
-            OR: [
-              { externalUserId: { contains: q, mode: 'insensitive' as const } },
-              { masterId: { contains: q, mode: 'insensitive' as const } },
-              { name: { contains: q, mode: 'insensitive' as const } },
-              { phoneNormalized: { contains: q.replace(/\D/g, '') } },
-              { email: { contains: q, mode: 'insensitive' as const } },
-            ],
-          }
-        : {}),
+      ...(searchOr.length ? { OR: searchOr } : {}),
     };
     const [data, total] = await Promise.all([
       // Show players WITH money first (depositors have names, deposits and a value
