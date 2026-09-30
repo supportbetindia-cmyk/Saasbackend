@@ -30,8 +30,7 @@ export class TransactionsService {
     private readonly customers: CustomersService,
   ) {}
 
-  /** Idempotent ingest: upsert customer, upsert transaction by (tenant, source,
-   * external id), normalize status, then recompute the customer's FTD. */
+ 
   async ingest(tenantId: string, input: IngestInput) {
     const type = normalizeType(input.transactionType);
     if (!type) throw new BadRequestException('transactionType must be deposit or withdrawal');
@@ -101,15 +100,27 @@ export class TransactionsService {
       orderBy: { occurredAt: 'desc' },
     });
     if (!last) return;
+    // deposit_count drives the lifecycle stage (Lead → FTD → Repeat → Regular). It's
+    // only seeded from the CSV import, so a lead who deposits via the live webhook
+    // keeps count 0 and stays "Lead" forever unless we bump it here. Forward-only via
+    // greatest(): raise an under-count from the ledger, never lower the imported total.
+    const ledgerCount = await this.prisma.transaction.count({
+      where: { tenantId, customerId, transactionType: type, isFinanciallySuccessful: true },
+    });
     const c = await this.prisma.customer.findUnique({
-      where: { id: customerId }, select: { lastDepositAt: true, lastWithdrawalAt: true },
+      where: { id: customerId },
+      select: { lastDepositAt: true, lastWithdrawalAt: true, depositCount: true, withdrawalCount: true },
     });
     if (type === 'DEPOSIT') {
-      if (!c?.lastDepositAt || c.lastDepositAt < last.occurredAt) {
-        await this.prisma.customer.update({ where: { id: customerId }, data: { lastDepositAt: last.occurredAt, lastDepositAmount: last.amount } });
-      }
-    } else if (!c?.lastWithdrawalAt || c.lastWithdrawalAt < last.occurredAt) {
-      await this.prisma.customer.update({ where: { id: customerId }, data: { lastWithdrawalAt: last.occurredAt, lastWithdrawalAmount: last.amount } });
+      const data: Prisma.CustomerUpdateInput = {};
+      if (!c?.lastDepositAt || c.lastDepositAt < last.occurredAt) { data.lastDepositAt = last.occurredAt; data.lastDepositAmount = last.amount; }
+      if (ledgerCount > (c?.depositCount ?? 0)) data.depositCount = ledgerCount;
+      if (Object.keys(data).length) await this.prisma.customer.update({ where: { id: customerId }, data });
+    } else {
+      const data: Prisma.CustomerUpdateInput = {};
+      if (!c?.lastWithdrawalAt || c.lastWithdrawalAt < last.occurredAt) { data.lastWithdrawalAt = last.occurredAt; data.lastWithdrawalAmount = last.amount; }
+      if (ledgerCount > (c?.withdrawalCount ?? 0)) data.withdrawalCount = ledgerCount;
+      if (Object.keys(data).length) await this.prisma.customer.update({ where: { id: customerId }, data });
     }
   }
 
