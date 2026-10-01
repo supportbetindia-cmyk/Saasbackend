@@ -86,7 +86,13 @@ export class TransactionsService {
     if (type === 'DEPOSIT') await this.recomputeFtd(tenantId, customer.id);
     // Keep the "last deposit/withdrawal" marker live from webhooks (the imported
     // legacy aggregates froze once and never refresh on their own).
-    await this.recomputeLastActivity(tenantId, customer.id, type);
+    await this.recomputeLastActivity(tenantId, customer.id, type)
+    await this.prisma.customer.updateMany({
+      where:{id:customer.id, registrationAt:null},
+      data:{
+        registrationAt:occurredAt
+      }
+    })
     return txn;
   }
 

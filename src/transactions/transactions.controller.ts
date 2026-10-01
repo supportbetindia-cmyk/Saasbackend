@@ -34,8 +34,7 @@ export class TransactionsController {
     private readonly audit: AuditService,
   ) {}
 
-  // KPI summary + recent rows for the Transactions page. `from`/`to` are epoch ms
-  // (computed client-side from the IST range picker); `from` omitted = all time.
+  
   @Get('summary')
   @RequirePermissions(PERMISSIONS.transactionsRead)
   summary(

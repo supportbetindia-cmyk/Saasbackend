@@ -2,9 +2,13 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CLASSIFICATION_CONFIG, parseClassificationConfig, type ClassificationConfig } from './classification.config';
 
+
 @Injectable()
 export class ClassificationService {
   constructor(private readonly prisma: PrismaService) {}
+
+
+
 
   /** The tenant's classification config — its saved overrides, or the code defaults. */
   async getConfig(tenantId: string): Promise<ClassificationConfig> {

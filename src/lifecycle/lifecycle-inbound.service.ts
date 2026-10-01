@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -74,6 +75,18 @@ export class LifecycleInboundService {
          and right(regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g'), 10) = $2`,
       tenantId, phone, optOut, help,
     );
+
+    // Store the customer's message as an inbound log row so the inbox can show the
+    // thread. event_key dedups Interakt's webhook retries (by provider id, else a hash).
+    if (text.trim()) {
+      const eventKey = 'inbound|' + (messageId ? String(messageId) : createHash('sha256').update(`${tenantId}|${phone}|${text}|${new Date().toISOString().slice(0, 16)}`).digest('hex'));
+      await this.prisma.$executeRawUnsafe(
+        `insert into public.message_log (event_key, channel, event_type, mobile, detail, provider_message_id, status, tenant_id, created_at)
+         values ($1,'whatsapp','inbound',$2,$3,$4,'received',$5::uuid, now())
+         on conflict (event_key) do nothing`,
+        eventKey, phone, text, messageId ? String(messageId) : null, tenantId,
+      ).catch(() => undefined);
+    }
     return { ok: true, action: optOut ? 'opt_out' : help ? 'support_open' : 'reply' };
   }
 
