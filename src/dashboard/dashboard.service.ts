@@ -6,6 +6,29 @@ import { customerScope } from '../customers/master-scope';
 type TxnAgg = { dep_sum: number; dep_cnt: number; wd_sum: number; wd_cnt: number; active: number };
 type CustAgg = { new_cust: number; ftd: number };
 
+type UserRowRaw = {
+  userId: string | null; branchId: string | null; name: string | null; mobile: string | null;
+  registerDate: Date | null; firstDepositAt: Date | null; firstDepositAmount: number | null;
+  depositCount: number; depositTotal: number; withdrawalCount: number; withdrawalTotal: number;
+  pnl: number; lastActivityAt: Date | null; reportStatus: string | null;
+};
+
+/** Shape one saas.customers/breakdown row into the UserRow the analytics page expects. */
+function toUserRow(r: UserRowRaw, now: number) {
+  const last = r.lastActivityAt ? new Date(r.lastActivityAt).getTime() : null;
+  const ageDays = last == null ? null : (now - last) / 86_400_000;
+  const status = ageDays == null ? 'registered_only' : ageDays <= 7 ? 'active' : ageDays <= 30 ? 'lapsed' : 'dormant';
+  return {
+    userId: r.userId ?? '', branchId: r.branchId, name: r.name && r.name !== '0' ? r.name : null, mobile: r.mobile,
+    registerDate: r.registerDate, registered: true,
+    firstDepositAt: r.firstDepositAt, firstDepositAmount: r.firstDepositAmount == null ? null : Number(r.firstDepositAmount),
+    depositCount: Number(r.depositCount), depositTotal: Number(r.depositTotal),
+    withdrawalCount: Number(r.withdrawalCount), withdrawalTotal: Number(r.withdrawalTotal),
+    pnl: Number(r.pnl), lastActivityAt: r.lastActivityAt, lastRemark: null,
+    depositor: Number(r.depositCount) > 0, status, fromReport: r.firstDepositAt != null, reportStatus: r.reportStatus,
+  };
+}
+
 @Injectable()
 export class DashboardService {
   constructor(private readonly prisma: PrismaService) {}
@@ -46,6 +69,121 @@ export class DashboardService {
       tenantId, r.start, r.end, masterId ?? null,
     );
     return rows[0];
+  }
+
+  /** Player-analytics page data, built from the LIVE saas tables (replaces the old
+   * Supabase public.* read that froze). Lifetime figures come straight from
+   * saas.customers; active/today counts from saas.transactions. */
+  async userAnalytics(tenantId: string, masterId?: string) {
+    const tz = await this.tenantTz(tenantId);
+    const now = Date.now();
+
+    const [cust] = await this.prisma.$queryRawUnsafe<Array<{
+      registered_users: number; depositors: number; never_deposited: number;
+      deposit_total: number; withdrawal_total: number; avg_first_deposit: number;
+      new7: number; new30: number; dormant_depositors: number;
+    }>>(
+      `select
+         count(*)::int as registered_users,
+         count(*) filter (where coalesce(deposit_count,0) > 0)::int as depositors,
+         count(*) filter (where coalesce(deposit_count,0) = 0)::int as never_deposited,
+         coalesce(sum(total_deposits),0)::float8 as deposit_total,
+         coalesce(sum(total_withdrawals),0)::float8 as withdrawal_total,
+         coalesce(avg(ftd_amount) filter (where ftd_amount is not null),0)::float8 as avg_first_deposit,
+         count(*) filter (where registration_at >= now() - interval '7 days')::int as new7,
+         count(*) filter (where registration_at >= now() - interval '30 days')::int as new30,
+         count(*) filter (where coalesce(deposit_count,0) > 0
+           and coalesce(greatest(last_deposit_at, last_withdrawal_at), to_timestamp(0)) < now() - interval '30 days')::int as dormant_depositors
+       from saas.customers
+       where tenant_id = $1 and ($2::text is null or master_id = $2)`,
+      tenantId, masterId ?? null,
+    );
+
+    const [txn] = await this.prisma.$queryRawUnsafe<Array<{
+      active_today: number; active7: number; active30: number; today_deposit: number; today_withdrawal: number;
+    }>>(
+      `with day0 as (select (date_trunc('day', now() at time zone $2) at time zone $2) as d)
+       select
+         count(distinct customer_id) filter (where occurred_at >= (select d from day0))::int as active_today,
+         count(distinct customer_id) filter (where occurred_at >= now() - interval '7 days')::int as active7,
+         count(distinct customer_id) filter (where occurred_at >= now() - interval '30 days')::int as active30,
+         coalesce(sum(amount) filter (where occurred_at >= (select d from day0) and transaction_type='DEPOSIT' and is_financially_successful),0)::float8 as today_deposit,
+         coalesce(sum(amount) filter (where occurred_at >= (select d from day0) and transaction_type='WITHDRAWAL' and is_financially_successful),0)::float8 as today_withdrawal
+       from saas.transactions t
+       where t.tenant_id = $1
+         and ($3::text is null or exists (select 1 from saas.customers c where c.id = t.customer_id and c.tenant_id = $1 and c.master_id = $3))`,
+      tenantId, tz, masterId ?? null,
+    );
+
+    const rows = await this.prisma.$queryRawUnsafe<Array<UserRowRaw>>(
+      `select
+         external_user_id as "userId", master_id as "branchId", name, phone as mobile,
+         registration_at as "registerDate", ftd_date as "firstDepositAt", ftd_amount::float8 as "firstDepositAmount",
+         coalesce(deposit_count,0)::int as "depositCount", coalesce(total_deposits,0)::float8 as "depositTotal",
+         coalesce(withdrawal_count,0)::int as "withdrawalCount", coalesce(total_withdrawals,0)::float8 as "withdrawalTotal",
+         (coalesce(total_deposits,0)-coalesce(total_withdrawals,0))::float8 as pnl,
+         greatest(last_deposit_at, last_withdrawal_at) as "lastActivityAt", current_lifecycle as "reportStatus"
+       from saas.customers
+       where tenant_id = $1 and ($2::text is null or master_id = $2)
+       order by total_deposits desc nulls last
+       limit 5000`,
+      tenantId, masterId ?? null,
+    );
+
+    const registeredUsers = Number(cust.registered_users);
+    const depositors = Number(cust.depositors);
+    return {
+      configured: true,
+      generatedAt: new Date(now).toISOString(),
+      totals: {
+        registeredUsers,
+        depositors,
+        ftdConversionPct: registeredUsers ? Math.round((depositors / registeredUsers) * 1000) / 10 : 0,
+        activeUsersToday: Number(txn.active_today),
+        activeUsers7d: Number(txn.active7),
+        activeUsers30d: Number(txn.active30),
+        dormantDepositors: Number(cust.dormant_depositors),
+        neverDeposited: Number(cust.never_deposited),
+        newRegistrations7d: Number(cust.new7),
+        newRegistrations30d: Number(cust.new30),
+        depositTotal: Number(cust.deposit_total),
+        withdrawalTotal: Number(cust.withdrawal_total),
+        netPnl: Number(cust.deposit_total) - Number(cust.withdrawal_total),
+        avgFirstDeposit: Math.round(Number(cust.avg_first_deposit)),
+        todayDepositTotal: Number(txn.today_deposit),
+        todayWithdrawalTotal: Number(txn.today_withdrawal),
+      },
+      users: rows.map((r) => toUserRow(r, now)),
+    };
+  }
+
+  /** Per-user breakdown scoped to a date window (deposits/withdrawals computed only
+   * from transactions in [from, to)). Powers the page's date-range view. */
+  async userBreakdown(tenantId: string, fromIso: string, toIso: string, masterId?: string) {
+    const now = Date.now();
+    const rows = await this.prisma.$queryRawUnsafe<Array<UserRowRaw>>(
+      `select
+         c.external_user_id as "userId", c.master_id as "branchId", c.name, c.phone as mobile,
+         c.registration_at as "registerDate",
+         min(t.occurred_at) filter (where t.transaction_type='DEPOSIT' and t.is_financially_successful) as "firstDepositAt",
+         null::float8 as "firstDepositAmount",
+         count(*) filter (where t.transaction_type='DEPOSIT' and t.is_financially_successful)::int as "depositCount",
+         coalesce(sum(t.amount) filter (where t.transaction_type='DEPOSIT' and t.is_financially_successful),0)::float8 as "depositTotal",
+         count(*) filter (where t.transaction_type='WITHDRAWAL' and t.is_financially_successful)::int as "withdrawalCount",
+         coalesce(sum(t.amount) filter (where t.transaction_type='WITHDRAWAL' and t.is_financially_successful),0)::float8 as "withdrawalTotal",
+         (coalesce(sum(t.amount) filter (where t.transaction_type='DEPOSIT' and t.is_financially_successful),0)
+          - coalesce(sum(t.amount) filter (where t.transaction_type='WITHDRAWAL' and t.is_financially_successful),0))::float8 as pnl,
+         max(t.occurred_at) as "lastActivityAt", null::text as "reportStatus"
+       from saas.transactions t
+       join saas.customers c on c.id = t.customer_id and c.tenant_id = t.tenant_id
+       where t.tenant_id = $1 and t.occurred_at >= $2 and t.occurred_at < $3
+         and ($4::text is null or c.master_id = $4)
+       group by c.id, c.external_user_id, c.master_id, c.name, c.phone, c.registration_at
+       order by "depositTotal" desc
+       limit 5000`,
+      tenantId, new Date(fromIso), new Date(toIso), masterId ?? null,
+    );
+    return { rows: rows.map((r) => toUserRow(r, now)) };
   }
 
   async overview(tenantId: string, period: PeriodKey, customFrom?: string, customTo?: string, masterId?: string) {

@@ -43,4 +43,26 @@ export class DashboardController {
     const key: PeriodKey = PERIODS.includes(period as PeriodKey) ? (period as PeriodKey) : 'month';
     return this.dashboard.details(tenant.id, key, metric ?? 'deposits', from, to, masterId);
   }
+
+  // Player-analytics page: lifetime totals + per-user table, from the live saas tables.
+  @Get('user-analytics')
+  @RequirePermissions(PERMISSIONS.customersRead)
+  userAnalytics(
+    @CurrentTenant() tenant: ActiveTenant,
+    @Query('masterId', MasterIdPipe) masterId?: string,
+  ) {
+    return this.dashboard.userAnalytics(tenant.id, masterId);
+  }
+
+  // Per-user breakdown for a date range (used by the page's range picker).
+  @Get('user-analytics/breakdown')
+  @RequirePermissions(PERMISSIONS.customersRead)
+  userBreakdown(
+    @CurrentTenant() tenant: ActiveTenant,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('masterId', MasterIdPipe) masterId?: string,
+  ) {
+    return this.dashboard.userBreakdown(tenant.id, from, to, masterId);
+  }
 }
