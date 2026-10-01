@@ -73,6 +73,13 @@ export class CustomersController {
     return this.customers.get360(tenant.id, id, masterId);
   }
 
+  // AI-written summary + recommended next action (stats only, no PII).
+  @Get(':id/ai-summary')
+  @RequirePermissions(PERMISSIONS.customersRead)
+  aiSummary(@CurrentTenant() tenant: ActiveTenant, @Param('id') id: string) {
+    return this.customers.aiSummary(tenant.id, id);
+  }
+
   @Get(':id/transactions')
   @RequirePermissions(PERMISSIONS.customersRead)
   transactions(

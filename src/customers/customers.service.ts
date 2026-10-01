@@ -17,6 +17,63 @@ function startOfTodayUtc(tz: string): Date {
   return new Date(now.getTime() - msSinceLocalMidnight);
 }
 
+/** One call to the Claude Messages API. Returns the model's text, or throws. */
+// async function callClaude(apiKey: string, system: string, user: string): Promise<string> {
+//   const controller = new AbortController();
+//   const timeout = setTimeout(() => controller.abort(), 20_000);
+//   try {
+//     const res = await fetch('https://api.anthropic.com/v1/messages', {
+//       method: 'POST',
+//       headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+//       body: JSON.stringify({
+//         model: 'claude-haiku-4-5-20251001', // cheap + fast for per-player summaries
+//         max_tokens: 400,
+//         system,
+//         messages: [{ role: 'user', content: user }],
+//       }),
+//       signal: controller.signal,
+//     });
+//     if (!res.ok) throw new Error(`AI request failed (${res.status})`);
+//     const json = (await res.json()) as { content?: { text?: string }[] };
+//     return json?.content?.[0]?.text ?? '';
+//   } finally {
+//     clearTimeout(timeout);
+//   }
+// }
+
+/** One call to the OpenAI Chat Completions API. Returns the model's text, or throws. */
+async function callOpenAI(apiKey: string, system: string, user: string): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',                       // cheap + fast; bump to gpt-4o for richer analysis
+        max_tokens: 400,  
+        response_format: { type: 'json_object' },   // guarantees valid JSON back
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`AI request failed (${res.status})`);
+    const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+    return json?.choices?.[0]?.message?.content ?? '';
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+
+function daysAgo(iso: string | Date | null | undefined): number | null {
+  if (!iso) return null;
+  return Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
+}
+
 
 
 export type UpsertCustomerInput = {
@@ -241,6 +298,45 @@ export class CustomersService {
       today: { deposits: today.dep, withdrawals: today.wd },
       classificationHistory,
     };
+  }
+
+  /** AI-written 360 summary + recommended next action. Sends STATS ONLY to Claude —
+   * never name/phone/email — so no player PII leaves our system. On-demand (the UI
+   * calls it on a button click), gated on ANTHROPIC_API_KEY. */
+  async aiSummary(tenantId: string, customerId: string): Promise<{ configured: boolean; summary: string | null; action: string | null }> {
+    const apiKey = process.env.GROQ_API_KEY;
+    if (!apiKey) return { configured: false, summary: null, action: null };
+    const d = await this.get360(tenantId, customerId);
+
+    // PII-free context — numbers and stage only.
+    const ctx = {
+      currency: 'INR',
+      stage: d.customer.currentLifecycle,
+      valueTier: d.customer.currentCategory,
+      registeredDaysAgo: daysAgo(d.customer.registrationAt),
+      lifetimeDeposits: d.lifetime.totalDeposits,
+      depositCount: d.lifetime.depositCount,
+      lifetimeWithdrawals: d.lifetime.totalWithdrawals,
+      netPnlHouse: d.lifetime.netPnl,
+      firstDepositAmount: d.ftd.amount,
+      firstDepositDaysAgo: daysAgo(d.ftd.date),
+      lastDepositAmount: d.lifetime.lastDepositAmount,
+      daysSinceLastDeposit: d.ledger.daysSinceLastDeposit,
+    };
+
+    const system =
+      'You are a retention analyst for an online betting platform. From ONE player\'s stats (INR), write: ' +
+      '(1) a 2-3 sentence plain-English summary of who they are and their current risk or opportunity, and ' +
+      '(2) ONE concrete next action for the retention team (e.g. which WhatsApp nudge to send, or leave alone). ' +
+      'Base everything ONLY on the numbers given — never invent data. Reply with strict JSON: {"summary": "...", "action": "..."}.';
+    const text = await callOpenAI (apiKey, system, `Player stats:\n${JSON.stringify(ctx, null, 2)}`);
+
+    try {
+      const j = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)) as { summary?: string; action?: string };
+      return { configured: true, summary: j.summary ?? null, action: j.action ?? null };
+    } catch {
+      return { configured: true, summary: text || null, action: null };
+    }
   }
 
   async transactionsFor(tenantId: string, customerId: string, opts: { page?: number; pageSize?: number }, masterId?: string) {
