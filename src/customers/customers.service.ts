@@ -50,8 +50,8 @@ async function callOpenAI(apiKey: string, system: string, user: string): Promise
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',                       // cheap + fast; bump to gpt-4o for richer analysis
-        max_tokens: 400,  
+        model: 'openai/gpt-oss-20b',                            // Groq model (live list: GET /openai/v1/models); 120b = richer
+        max_tokens: 400,
         response_format: { type: 'json_object' },   // guarantees valid JSON back
         messages: [
           { role: 'system', content: system },
@@ -60,7 +60,7 @@ async function callOpenAI(apiKey: string, system: string, user: string): Promise
       }),
       signal: controller.signal,
     });
-    if (!res.ok) throw new Error(`AI request failed (${res.status})`);
+    if (!res.ok) throw new Error(`AI request failed (${res.status}): ${(await res.text()).slice(0, 200)}`);
     const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
     return json?.choices?.[0]?.message?.content ?? '';
   } finally {
