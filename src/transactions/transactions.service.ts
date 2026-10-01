@@ -87,12 +87,13 @@ export class TransactionsService {
     // Keep the "last deposit/withdrawal" marker live from webhooks (the imported
     // legacy aggregates froze once and never refresh on their own).
     await this.recomputeLastActivity(tenantId, customer.id, type)
+    // Give ONLY brand-new players (created by this ingest) a join date. The createdAt
+    // guard stops us back-filling established depositors — otherwise an old player who
+    // transacts today would wrongly show up as "registered today".
     await this.prisma.customer.updateMany({
-      where:{id:customer.id, registrationAt:null},
-      data:{
-        registrationAt:occurredAt
-      }
-    })
+      where: { id: customer.id, registrationAt: null, createdAt: { gte: new Date(Date.now() - 2 * 60_000) } },
+      data: { registrationAt: occurredAt },
+    });
     return txn;
   }
 
