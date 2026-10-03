@@ -134,46 +134,9 @@ export class CustomersService {
   ) {
     const page = Math.max(1, opts.page ?? 1);
     const pageSize = Math.min(200, Math.max(1, opts.pageSize ?? 50));
-    const q = (opts.search ?? '').trim();
-    const digits = q.replace(/\D/g, '');
-  
-    const looksLikeName = q !== '' && /^[\p{L}\s.'-]+$/u.test(q);
-    const searchOr = !q
-      ? []
-      : looksLikeName
-        ? [
-            { name: { contains: q, mode: 'insensitive' as const } },
-            { email: { contains: q, mode: 'insensitive' as const } },
-          ]
-        : [
-            { externalUserId: { equals: q, mode: 'insensitive' as const } },
-            { masterId: { equals: q, mode: 'insensitive' as const } },
-            { email: { equals: q, mode: 'insensitive' as const } },
-            ...(digits.length >= 6 ? [{ phoneNormalized: { equals: digits } }] : []),
-          ];
-    // Active/Inactive uses the same rule as the Players "Status" column: a player is
-    // inactive once their most recent transaction is older than 7 days (ACTIVITY_INACTIVE_DAYS).
-    const activeCutoff = new Date(Date.now() - ACTIVITY_INACTIVE_DAYS * 86_400_000);
-    const activityAnd =
-      opts.activity === 'active'
-        ? [{ OR: [{ lastDepositAt: { gte: activeCutoff } }, { lastWithdrawalAt: { gte: activeCutoff } }] }]
-        : opts.activity === 'inactive'
-          ? [
-              { OR: [{ lastDepositAt: { not: null } }, { lastWithdrawalAt: { not: null } }] }, // has some activity
-              { OR: [{ lastDepositAt: null }, { lastDepositAt: { lt: activeCutoff } }] },       // …but latest is
-              { OR: [{ lastWithdrawalAt: null }, { lastWithdrawalAt: { lt: activeCutoff } }] }, // …older than the cutoff
-            ]
-          : [];
-    const where = {
-      ...customerScope(tenantId, opts.masterId),
-      ...(opts.missingRegistration ? { registrationAt: null } : {}),
-      ...(opts.stage ? { currentLifecycle: opts.stage } : {}),
-      ...(searchOr.length ? { OR: searchOr } : {}),
-      ...(activityAnd.length ? { AND: activityAnd } : {}),
-    };
+    const where = this.listWhere(tenantId, opts);
     const [data, total] = await Promise.all([
-      // Show players WITH money first (depositors have names, deposits and a value
-      // group) so the list isn't a wall of empty rows; newest sign-ups after that.
+    
       this.prisma.customer.findMany({
         where,
         orderBy: [{ totalDeposits: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
@@ -190,6 +153,84 @@ export class CustomersService {
       todayWithdrawals: today.get(c.id)?.wd ?? 0,
     }));
     return { data: enriched, page, pageSize, total };
+  }
+
+  /** The Prisma `where` for the players list — shared by list() and exportRows() so the
+   * export always matches exactly what the filters show. */
+  private listWhere(
+    tenantId: string,
+    opts: { search?: string; missingRegistration?: boolean; masterId?: string; stage?: string; activity?: string },
+  ) {
+    const q = (opts.search ?? '').trim();
+    const digits = q.replace(/\D/g, '');
+    const looksLikeName = q !== '' && /^[\p{L}\s.'-]+$/u.test(q);
+    const searchOr = !q
+      ? []
+      : looksLikeName
+        ? [
+            { name: { contains: q, mode: 'insensitive' as const } },
+            { email: { contains: q, mode: 'insensitive' as const } },
+          ]
+        : [
+            { externalUserId: { equals: q, mode: 'insensitive' as const } },
+            { masterId: { equals: q, mode: 'insensitive' as const } },
+            { email: { equals: q, mode: 'insensitive' as const } },
+            ...(digits.length >= 6 ? [{ phoneNormalized: { equals: digits } }] : []),
+          ];
+    const activeCutoff = new Date(Date.now() - ACTIVITY_INACTIVE_DAYS * 86_400_000);
+    const activityAnd =
+      opts.activity === 'active'
+        ? [{ OR: [{ lastDepositAt: { gte: activeCutoff } }, { lastWithdrawalAt: { gte: activeCutoff } }] }]
+        : opts.activity === 'inactive'
+          ? [
+              { OR: [{ lastDepositAt: { not: null } }, { lastWithdrawalAt: { not: null } }] },
+              { OR: [{ lastDepositAt: null }, { lastDepositAt: { lt: activeCutoff } }] },
+              { OR: [{ lastWithdrawalAt: null }, { lastWithdrawalAt: { lt: activeCutoff } }] },
+            ]
+          : [];
+    return {
+      ...customerScope(tenantId, opts.masterId),
+      ...(opts.missingRegistration ? { registrationAt: null } : {}),
+      ...(opts.stage ? { currentLifecycle: opts.stage } : {}),
+      ...(searchOr.length ? { OR: searchOr } : {}),
+      ...(activityAnd.length ? { AND: activityAnd } : {}),
+    };
+  }
+
+  /** All players matching the current filters as a CSV string (capped for safety).
+   * Lifetime figures only — no per-row "today" lookups, so it stays one query. */
+  async exportCsv(
+    tenantId: string,
+    opts: { search?: string; missingRegistration?: boolean; masterId?: string; stage?: string; activity?: string },
+  ): Promise<string> {
+    const rows = await this.prisma.customer.findMany({
+      where: this.listWhere(tenantId, opts),
+      orderBy: [{ totalDeposits: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
+      take: 50000,
+    });
+    const headers = [
+      'Name', 'Player ID', 'Master ID', 'Phone', 'Stage', 'Group', 'Joined on',
+      'First deposit', 'First deposit date', 'Last deposit', 'Last deposit date',
+      'Total deposits', 'Deposit count', 'Total withdrawals', 'Withdrawal count',
+      'Profit/Loss', 'Loss commission 3%',
+    ];
+    const n = (v: unknown) => (v == null || v === '' ? '' : String(Number(v)));
+    const d = (v: Date | null) => (v ? v.toISOString().slice(0, 10) : '');
+    // Escape a CSV cell: wrap in quotes and double any internal quotes.
+    const cell = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const lines = [headers.map(cell).join(',')];
+    for (const c of rows) {
+      const pnl = c.netPnl == null ? null : Number(c.netPnl);
+      const lossComm = pnl != null && pnl > 0 ? Math.round(pnl * 0.03) : 0;
+      lines.push([
+        c.name ?? '', c.externalUserId ?? '', c.masterId ?? '', c.phone ?? '',
+        c.currentLifecycle ?? '', c.currentCategory ?? '', d(c.registrationAt),
+        n(c.ftdAmount), d(c.ftdDate), n(c.lastDepositAmount), d(c.lastDepositAt),
+        n(c.totalDeposits), c.depositCount ?? '', n(c.totalWithdrawals), c.withdrawalCount ?? '',
+        pnl == null ? '' : String(pnl), lossComm || '',
+      ].map(cell).join(','));
+    }
+    return lines.join('\n');
   }
 
   async masters(tenantId: string): Promise<string[]> {

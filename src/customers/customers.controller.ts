@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Header, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { IsEmail, IsOptional, IsString } from 'class-validator';
 import { AuthGuard } from '../auth/auth.guard';
 import { TenantGuard } from '../auth/tenant.guard';
@@ -47,6 +47,25 @@ export class CustomersController {
       page: Number(page) || undefined,
       pageSize: Number(pageSize) || undefined,
       missingRegistration: missingRegistration === 'true',
+    });
+  }
+
+  // CSV of all players matching the current filters. Declared before :id so the
+  // router doesn't treat "export" as an id.
+  @Get('export')
+  @RequirePermissions(PERMISSIONS.customersExport)
+  @Header('Content-Type', 'text/csv; charset=utf-8')
+  @Header('Content-Disposition', 'attachment; filename="players.csv"')
+  exportCsv(
+    @CurrentTenant() tenant: ActiveTenant,
+    @Query('search') search?: string,
+    @Query('missingRegistration') missingRegistration?: string,
+    @Query('stage') stage?: string,
+    @Query('activity') activity?: string,
+    @Query('masterId', MasterIdPipe) masterId?: string,
+  ) {
+    return this.customers.exportCsv(tenant.id, {
+      search, stage, activity, masterId, missingRegistration: missingRegistration === 'true',
     });
   }
 
