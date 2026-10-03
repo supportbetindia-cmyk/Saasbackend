@@ -130,7 +130,7 @@ export class CustomersService {
 
   async list(
     tenantId: string,
-    opts: { search?: string; page?: number; pageSize?: number; missingRegistration?: boolean; masterId?: string; stage?: string; activity?: string },
+    opts: { search?: string; page?: number; pageSize?: number; missingRegistration?: boolean; masterId?: string; stage?: string; activity?: string; tier?: string; quietDays?: number; hasPhone?: boolean },
   ) {
     const page = Math.max(1, opts.page ?? 1);
     const pageSize = Math.min(200, Math.max(1, opts.pageSize ?? 50));
@@ -159,7 +159,7 @@ export class CustomersService {
    * export always matches exactly what the filters show. */
   private listWhere(
     tenantId: string,
-    opts: { search?: string; missingRegistration?: boolean; masterId?: string; stage?: string; activity?: string },
+    opts: { search?: string; missingRegistration?: boolean; masterId?: string; stage?: string; activity?: string; tier?: string; quietDays?: number; hasPhone?: boolean },
   ) {
     const q = (opts.search ?? '').trim();
     const digits = q.replace(/\D/g, '');
@@ -188,12 +188,21 @@ export class CustomersService {
               { OR: [{ lastWithdrawalAt: null }, { lastWithdrawalAt: { lt: activeCutoff } }] },
             ]
           : [];
+    // "Quiet for N days" = has deposited, but the last deposit is older than N days (win-back targeting).
+    const quietAnd = opts.quietDays
+      ? [{ lastDepositAt: { not: null } }, { lastDepositAt: { lt: new Date(Date.now() - opts.quietDays * 86_400_000) } }]
+      : [];
+    // Has a reachable phone number (for WhatsApp targeting / clean export lists).
+    const phoneAnd = opts.hasPhone ? [{ phoneNormalized: { not: null } }, { phoneNormalized: { not: '' } }] : [];
+    // All AND-style conditions merged into ONE array (a where can't have two `AND` keys).
+    const and = [...activityAnd, ...quietAnd, ...phoneAnd];
     return {
       ...customerScope(tenantId, opts.masterId),
       ...(opts.missingRegistration ? { registrationAt: null } : {}),
       ...(opts.stage ? { currentLifecycle: opts.stage } : {}),
+      ...(opts.tier ? { currentCategory: opts.tier } : {}),      // value tier: VIP / Platinum / Gold / Silver
       ...(searchOr.length ? { OR: searchOr } : {}),
-      ...(activityAnd.length ? { AND: activityAnd } : {}),
+      ...(and.length ? { AND: and } : {}),
     };
   }
 
@@ -201,7 +210,7 @@ export class CustomersService {
    * Lifetime figures only — no per-row "today" lookups, so it stays one query. */
   async exportCsv(
     tenantId: string,
-    opts: { search?: string; missingRegistration?: boolean; masterId?: string; stage?: string; activity?: string },
+    opts: { search?: string; missingRegistration?: boolean; masterId?: string; stage?: string; activity?: string; tier?: string; quietDays?: number; hasPhone?: boolean },
   ): Promise<string> {
     const rows = await this.prisma.customer.findMany({
       where: this.listWhere(tenantId, opts),

@@ -37,6 +37,9 @@ export class CustomersController {
     @Query('missingRegistration') missingRegistration?: string,
     @Query('stage') stage?: string,
     @Query('activity') activity?: string,
+    @Query('tier') tier?: string,
+    @Query('quietDays') quietDays?: string,
+    @Query('hasPhone') hasPhone?: string,
     @Query('masterId', MasterIdPipe) masterId?: string,
   ) {
     return this.customers.list(tenant.id, {
@@ -44,6 +47,9 @@ export class CustomersController {
       masterId,
       stage,
       activity,
+      tier,
+      quietDays: Number(quietDays) || undefined,
+      hasPhone: hasPhone === 'true',
       page: Number(page) || undefined,
       pageSize: Number(pageSize) || undefined,
       missingRegistration: missingRegistration === 'true',
@@ -62,10 +68,16 @@ export class CustomersController {
     @Query('missingRegistration') missingRegistration?: string,
     @Query('stage') stage?: string,
     @Query('activity') activity?: string,
+    @Query('tier') tier?: string,
+    @Query('quietDays') quietDays?: string,
+    @Query('hasPhone') hasPhone?: string,
     @Query('masterId', MasterIdPipe) masterId?: string,
   ) {
     return this.customers.exportCsv(tenant.id, {
-      search, stage, activity, masterId, missingRegistration: missingRegistration === 'true',
+      search, stage, activity, tier, masterId,
+      quietDays: Number(quietDays) || undefined,
+      hasPhone: hasPhone === 'true',
+      missingRegistration: missingRegistration === 'true',
     });
   }
 
