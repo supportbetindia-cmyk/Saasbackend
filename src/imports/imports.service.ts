@@ -200,14 +200,19 @@ export class ImportsService {
         registration_at  = excluded.registration_at,
         account_status   = excluded.account_status,
         current_category = excluded.current_category,
-        ftd_date         = excluded.ftd_date,
-        ftd_amount       = excluded.ftd_amount,
-        total_deposits   = excluded.total_deposits,
-        deposit_count    = excluded.deposit_count,
-        total_withdrawals = excluded.total_withdrawals,
-        withdrawal_count = excluded.withdrawal_count,
-        net_pnl          = excluded.net_pnl,
-        total_bonus      = excluded.total_bonus,
+        ftd_date         = coalesce(excluded.ftd_date, saas.customers.ftd_date),
+        ftd_amount       = coalesce(excluded.ftd_amount, saas.customers.ftd_amount),
+        total_deposits   = coalesce(excluded.total_deposits, saas.customers.total_deposits),
+        -- deposit_count drives the lead/depositor stage. The frozen legacy snapshot often
+        -- carries a last-deposit date but NO count, so never clobber a real count with null,
+        -- and imply at least 1 deposit when there's a last-deposit (else players strand as leads).
+        deposit_count    = greatest(coalesce(excluded.deposit_count, 0), coalesce(saas.customers.deposit_count, 0),
+             case when coalesce(excluded.last_deposit_at, saas.customers.last_deposit_at) is not null then 1 else 0 end),
+        total_withdrawals = coalesce(excluded.total_withdrawals, saas.customers.total_withdrawals),
+        withdrawal_count = greatest(coalesce(excluded.withdrawal_count, 0), coalesce(saas.customers.withdrawal_count, 0),
+             case when coalesce(excluded.last_withdrawal_at, saas.customers.last_withdrawal_at) is not null then 1 else 0 end),
+        net_pnl          = coalesce(excluded.net_pnl, saas.customers.net_pnl),
+        total_bonus      = coalesce(excluded.total_bonus, saas.customers.total_bonus),
         -- Forward-only: the legacy users table is a frozen snapshot; never move the
         -- last-deposit/withdrawal marker BACKWARD over what live webhooks recorded.
         last_deposit_at  = case when excluded.last_deposit_at is not null
