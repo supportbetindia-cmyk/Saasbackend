@@ -32,13 +32,21 @@ export class ClassificationService {
   private lifecycleCase(cfg: ClassificationConfig): string {
     const { atRiskDays, inactiveDays } = cfg.inactivity;
     const regular = cfg.regularPlayerMinDeposits;
+    // Effective deposit count: a player with a last_deposit_at or money deposited HAS
+    // deposited, even if deposit_count drifted to 0 (the webhook sets the date/amount
+    // but doesn't always bump the count). Keying "no deposit" on the count alone was
+    // mislabeling real depositors as Leads. Trust any deposit evidence here.
+    const deposits = `greatest(
+      coalesce(deposit_count, 0),
+      case when last_deposit_at is not null or coalesce(total_deposits, 0) > 0 then 1 else 0 end
+    )`;
     return `case
-      when coalesce(deposit_count, 0) = 0
+      when ${deposits} = 0
         then case when registration_at is not null then 'Registered' else 'Lead' end
       when last_deposit_at is not null and now() - last_deposit_at > interval '${inactiveDays} days' then 'Inactive'
       when last_deposit_at is not null and now() - last_deposit_at > interval '${atRiskDays} days' then 'At Risk'
-      when coalesce(deposit_count, 0) = 1 then 'FTD'
-      when coalesce(deposit_count, 0) >= ${regular} then 'Regular Player'
+      when ${deposits} = 1 then 'FTD'
+      when ${deposits} >= ${regular} then 'Regular Player'
       else 'Repeat Depositor'
     end`;
   }

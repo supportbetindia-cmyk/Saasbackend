@@ -32,14 +32,22 @@ export class LifecycleService {
    * layered on in recompute() (you can't see it from current state alone).
    */
   private stageCase(cfg: LifecycleConfig): string {
+    // Effective deposit count: a last_deposit_at or money deposited means they HAVE
+    // deposited, even if deposit_count drifted to 0. A depositor must never fall into
+    // LEAD/REGISTERED_NO_FTD just because registration_at or the count is missing —
+    // so the no-deposit branch is checked first, on real deposit evidence.
+    const deposits = `greatest(
+      coalesce(deposit_count, 0),
+      case when last_deposit_at is not null or coalesce(total_deposits, 0) > 0 then 1 else 0 end
+    )`;
     return `case
-      when registration_at is null then 'LEAD'
-      when coalesce(deposit_count, 0) = 0 then 'REGISTERED_NO_FTD'
+      when ${deposits} = 0
+        then case when registration_at is null then 'LEAD' else 'REGISTERED_NO_FTD' end
       when greatest(last_deposit_at, last_withdrawal_at) is not null
         and now() - greatest(last_deposit_at, last_withdrawal_at) > interval '${cfg.inactiveDays} days' then 'INACTIVE'
-      when deposit_count = 1 and ftd_date is not null
+      when ${deposits} = 1 and ftd_date is not null
         and now() - ftd_date <= interval '${cfg.ftdNoRepeatDays} days' then 'FTD'
-      when deposit_count = 1 then 'FTD_NO_REPEAT'
+      when ${deposits} = 1 then 'FTD_NO_REPEAT'
       else 'ACTIVE'
     end`;
   }

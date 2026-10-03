@@ -19,14 +19,15 @@ create materialized view if not exists saas.mv_tenant_metrics as
 select
   tenant_id,
   count(*)::int as registered_users,
-  count(*) filter (where coalesce(deposit_count,0) > 0)::int as depositors,
-  count(*) filter (where coalesce(deposit_count,0) = 0)::int as never_deposited,
+  -- "Has deposited" = any deposit evidence, not the drift-prone count alone (matches liveCustAgg).
+  count(*) filter (where coalesce(deposit_count,0) > 0 or last_deposit_at is not null or coalesce(total_deposits,0) > 0)::int as depositors,
+  count(*) filter (where coalesce(deposit_count,0) = 0 and last_deposit_at is null and coalesce(total_deposits,0) = 0)::int as never_deposited,
   coalesce(sum(total_deposits),0)::float8 as deposit_total,
   coalesce(sum(total_withdrawals),0)::float8 as withdrawal_total,
   coalesce(avg(ftd_amount) filter (where ftd_amount is not null),0)::float8 as avg_first_deposit,
   count(*) filter (where registration_at >= now() - interval '7 days')::int as new7,
   count(*) filter (where registration_at >= now() - interval '30 days')::int as new30,
-  count(*) filter (where coalesce(deposit_count,0) > 0
+  count(*) filter (where (coalesce(deposit_count,0) > 0 or last_deposit_at is not null or coalesce(total_deposits,0) > 0)
     and coalesce(greatest(last_deposit_at, last_withdrawal_at), to_timestamp(0)) < now() - interval '30 days')::int as dormant_depositors,
   now() as refreshed_at
 from saas.customers

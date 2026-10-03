@@ -25,7 +25,9 @@ function toUserRow(r: UserRowRaw, now: number) {
     depositCount: Number(r.depositCount), depositTotal: Number(r.depositTotal),
     withdrawalCount: Number(r.withdrawalCount), withdrawalTotal: Number(r.withdrawalTotal),
     pnl: Number(r.pnl), lastActivityAt: r.lastActivityAt, lastRemark: null,
-    depositor: Number(r.depositCount) > 0, status, fromReport: r.firstDepositAt != null, reportStatus: r.reportStatus,
+    // Evidence-based: stored depositCount can lag, so a deposit total or FTD date also counts.
+    depositor: Number(r.depositCount) > 0 || Number(r.depositTotal) > 0 || r.firstDepositAt != null,
+    status, fromReport: r.firstDepositAt != null, reportStatus: r.reportStatus,
   };
 }
 
@@ -92,14 +94,15 @@ export class DashboardService {
     const liveCustAgg = () => this.prisma.$queryRawUnsafe<CustAggRow[]>(
       `select
          count(*)::int as registered_users,
-         count(*) filter (where coalesce(deposit_count,0) > 0)::int as depositors,
-         count(*) filter (where coalesce(deposit_count,0) = 0)::int as never_deposited,
+         -- "Has deposited" = any deposit evidence, not the (drift-prone) count alone.
+         count(*) filter (where coalesce(deposit_count,0) > 0 or last_deposit_at is not null or coalesce(total_deposits,0) > 0)::int as depositors,
+         count(*) filter (where coalesce(deposit_count,0) = 0 and last_deposit_at is null and coalesce(total_deposits,0) = 0)::int as never_deposited,
          coalesce(sum(total_deposits),0)::float8 as deposit_total,
          coalesce(sum(total_withdrawals),0)::float8 as withdrawal_total,
          coalesce(avg(ftd_amount) filter (where ftd_amount is not null),0)::float8 as avg_first_deposit,
          count(*) filter (where registration_at >= now() - interval '7 days')::int as new7,
          count(*) filter (where registration_at >= now() - interval '30 days')::int as new30,
-         count(*) filter (where coalesce(deposit_count,0) > 0
+         count(*) filter (where (coalesce(deposit_count,0) > 0 or last_deposit_at is not null or coalesce(total_deposits,0) > 0)
            and coalesce(greatest(last_deposit_at, last_withdrawal_at), to_timestamp(0)) < now() - interval '30 days')::int as dormant_depositors
        from saas.customers
        where tenant_id = $1 and ($2::text is null or master_id = $2)`,
