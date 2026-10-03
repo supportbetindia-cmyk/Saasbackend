@@ -19,6 +19,7 @@ import { BudgetsModule } from './budgets/budgets.module';
 import { WinbackModule } from './winback/winback.module';
 import { LifecycleModule } from './lifecycle/lifecycle.module';
 import { InboxModule } from './inbox/inbox.module';
+import { AlertsModule } from './alerts/alerts.module';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { InboxModule } from './inbox/inbox.module';
     WinbackModule,
     LifecycleModule,
     InboxModule,
+    AlertsModule,
   ],
 })
 export class AppModule {}
