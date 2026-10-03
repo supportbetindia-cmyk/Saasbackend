@@ -18,6 +18,13 @@ export class AlertsController {
     return this.alerts.list(tenant.id, unacked === 'true');
   }
 
+  // Full health/drift report (pass + fail) — read-only status board, no alerts created.
+  @Get('health')
+  @RequirePermissions(PERMISSIONS.customersRead)
+  health(@CurrentTenant() tenant: ActiveTenant) {
+    return this.alerts.healthReport(tenant.id);
+  }
+
   // Run the detection rules now (also runs hourly when ALERTS_ENABLED=1).
   @Post('run')
   @RequirePermissions(PERMISSIONS.customersWrite)
