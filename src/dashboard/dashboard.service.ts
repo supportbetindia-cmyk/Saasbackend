@@ -78,11 +78,18 @@ export class DashboardService {
     const tz = await this.tenantTz(tenantId);
     const now = Date.now();
 
-    const [cust] = await this.prisma.$queryRawUnsafe<Array<{
+    // Customer-side rollup. At scale this full-table aggregate is the slow part, so we
+    // can read it from the saas.mv_tenant_metrics materialized view instead. The MV is
+    // used ONLY when USE_METRICS_MV=1 AND there's no master filter (the MV is per-tenant,
+    // not per-master). We fall back to a live aggregate for: the flag being off, any
+    // master-scoped request, a tenant not yet in the MV, or any MV read error — so the
+    // numbers are always correct, just possibly a few minutes stale when served from the MV.
+    type CustAggRow = {
       registered_users: number; depositors: number; never_deposited: number;
       deposit_total: number; withdrawal_total: number; avg_first_deposit: number;
       new7: number; new30: number; dormant_depositors: number;
-    }>>(
+    };
+    const liveCustAgg = () => this.prisma.$queryRawUnsafe<CustAggRow[]>(
       `select
          count(*)::int as registered_users,
          count(*) filter (where coalesce(deposit_count,0) > 0)::int as depositors,
@@ -98,6 +105,18 @@ export class DashboardService {
        where tenant_id = $1 and ($2::text is null or master_id = $2)`,
       tenantId, masterId ?? null,
     );
+
+    let cust: CustAggRow | undefined;
+    if (process.env.USE_METRICS_MV === '1' && !masterId) {
+      const rows = await this.prisma.$queryRawUnsafe<CustAggRow[]>(
+        `select registered_users, depositors, never_deposited, deposit_total, withdrawal_total,
+                avg_first_deposit, new7, new30, dormant_depositors
+         from saas.mv_tenant_metrics where tenant_id = $1`,
+        tenantId,
+      ).catch(() => [] as CustAggRow[]); // MV absent / mid-refresh error → fall through to live
+      cust = rows[0];
+    }
+    if (!cust) [cust] = await liveCustAgg();
 
     const [txn] = await this.prisma.$queryRawUnsafe<Array<{
       active_today: number; active7: number; active30: number; today_deposit: number; today_withdrawal: number;

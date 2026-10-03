@@ -51,6 +51,12 @@ export class LiveSyncService implements OnApplicationBootstrap, OnModuleDestroy 
           this.log.debug(`skip ${t.name}: ${err instanceof Error ? err.message : err}`);
         }
       }
+      // Refresh the metrics materialized view (all tenants at once) when it's in use.
+      // CONCURRENTLY = no read lock; catch so a missing/locked MV never breaks the tick.
+      if (process.env.USE_METRICS_MV === '1') {
+        await this.prisma.$executeRawUnsafe('refresh materialized view concurrently saas.mv_tenant_metrics')
+          .catch((e) => this.log.debug(`mv refresh skipped: ${e instanceof Error ? e.message : e}`));
+      }
     } catch (err) {
       this.log.error(`sync failed: ${err instanceof Error ? err.message : err}`);
     } finally {
