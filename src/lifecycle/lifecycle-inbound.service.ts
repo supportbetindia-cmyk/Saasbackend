@@ -65,7 +65,7 @@ export class LifecycleInboundService {
     const help = HELP_RE.test(text);
 
     // last_customer_reply_at always; flags flip ON but never back OFF here (only STOP sets opt-out).
-    await this.prisma.$executeRawUnsafe(
+    const updated = await this.prisma.$executeRawUnsafe(
       `update saas.customers
          set last_customer_reply_at = now(),
              marketing_opt_out = marketing_opt_out or $3,
@@ -75,6 +75,27 @@ export class LifecycleInboundService {
          and right(regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g'), 10) = $2`,
       tenantId, phone, optOut, help,
     );
+
+    // Nobody with this phone yet → this is a WhatsApp contact who messaged us but never
+    // registered. Capture them as a LEAD so the lifecycle sender can nudge them to sign up.
+    // ponytail: no phone-unique constraint, so a rare simultaneous double-insert is possible;
+    // the `not exists` guard catches Interakt's (sequential) webhook retries, which is the real case.
+    let created = 0;
+    if (updated === 0) {
+      created = await this.prisma.$executeRawUnsafe(
+        `insert into saas.customers
+           (id, tenant_id, phone, phone_normalized, registration_at, current_stage, current_lifecycle,
+            last_customer_reply_at, marketing_opt_out, support_issue_open, follow_up_count, created_at, updated_at)
+         select gen_random_uuid()::text, $1, $2, $2, null, 'LEAD', 'Lead',
+                now(), $3, $4, 0, now(), now()
+         where not exists (
+           select 1 from saas.customers
+           where tenant_id = $1
+             and right(regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g'), 10) = $2
+         )`,
+        tenantId, phone, optOut, help,
+      );
+    }
 
     // Store the customer's message as an inbound log row so the inbox can show the
     // thread. event_key dedups Interakt's webhook retries (by provider id, else a hash).
@@ -87,7 +108,7 @@ export class LifecycleInboundService {
         eventKey, phone, text, messageId ? String(messageId) : null, tenantId,
       ).catch(() => undefined);
     }
-    return { ok: true, action: optOut ? 'opt_out' : help ? 'support_open' : 'reply' };
+    return { ok: true, action: created ? 'lead_created' : optOut ? 'opt_out' : help ? 'support_open' : 'reply' };
   }
 
   private logRaw(body: Record<string, unknown>) {
