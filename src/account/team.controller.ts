@@ -95,8 +95,37 @@ export class TeamController {
     if (target.role === 'OWNER' && actorMembership.role !== 'OWNER') throw new BadRequestException('Only an owner can remove an owner');
     if (target.role === 'OWNER') await this.requireAnotherOwner(tenant.id, id);
     await this.prisma.tenantMembership.delete({ where: { id } });
+
+    // If this was their last membership anywhere, free the email entirely so it can be
+    // invited again: drop the saas.users row AND the GoTrue auth.users record (which is
+    // what otherwise makes a re-invite fail with "already registered").
+    const remaining = await this.prisma.tenantMembership.count({ where: { userId: target.userId } });
+    if (remaining === 0) {
+      const user = await this.prisma.user.findUnique({ where: { id: target.userId } });
+      await this.prisma.user.delete({ where: { id: target.userId } }).catch(() => undefined);
+      if (user) await this.deleteSupabaseUser(user.email);
+    }
+
     await this.audit.log({ tenantId: tenant.id, actorUserId: actor.id, action: 'team.member.removed', entityType: 'membership', entityId: id, oldValue: { userId: target.userId, role: target.role } });
     return { ok: true };
+  }
+
+  // Remove the GoTrue auth user by email so the address is fully released. saas.users may
+  // only hold an "invite:" placeholder, so resolve the real id from auth.users, then let
+  // the admin API delete it (cascades identities/sessions).
+  private async deleteSupabaseUser(email: string) {
+    const url = process.env.SUPABASE_URL;
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!url || !key) return;
+    const rows = await this.prisma.$queryRawUnsafe<{ id: string }[]>(
+      `select id::text from auth.users where lower(email) = lower($1) limit 1`, email,
+    ).catch(() => [] as { id: string }[]);
+    const id = rows[0]?.id;
+    if (!id) return;
+    await fetch(`${url}/auth/v1/admin/users/${id}`, {
+      method: 'DELETE',
+      headers: { apikey: key, Authorization: `Bearer ${key}` },
+    }).catch(() => undefined);
   }
 
   private async membership(tenantId: string, id: string) {
