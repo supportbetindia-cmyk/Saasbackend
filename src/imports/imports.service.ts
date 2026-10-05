@@ -105,11 +105,13 @@ export class ImportsService {
         current_category = excluded.current_category,
         ftd_date         = coalesce(excluded.ftd_date, saas.customers.ftd_date),
         ftd_amount       = coalesce(excluded.ftd_amount, saas.customers.ftd_amount),
-        total_deposits   = coalesce(excluded.total_deposits, saas.customers.total_deposits),
-        deposit_count    = coalesce(excluded.deposit_count, saas.customers.deposit_count),
-        total_withdrawals = coalesce(excluded.total_withdrawals, saas.customers.total_withdrawals),
-        withdrawal_count = coalesce(excluded.withdrawal_count, saas.customers.withdrawal_count),
-        net_pnl          = coalesce(excluded.net_pnl, saas.customers.net_pnl),
+        -- Forward-only: never let an older snapshot pull a total/count BACK below live data.
+        total_deposits   = greatest(coalesce(excluded.total_deposits, 0), coalesce(saas.customers.total_deposits, 0)),
+        deposit_count    = greatest(coalesce(excluded.deposit_count, 0), coalesce(saas.customers.deposit_count, 0)),
+        total_withdrawals = greatest(coalesce(excluded.total_withdrawals, 0), coalesce(saas.customers.total_withdrawals, 0)),
+        withdrawal_count = greatest(coalesce(excluded.withdrawal_count, 0), coalesce(saas.customers.withdrawal_count, 0)),
+        net_pnl          = greatest(coalesce(excluded.total_deposits, 0), coalesce(saas.customers.total_deposits, 0))
+                           - greatest(coalesce(excluded.total_withdrawals, 0), coalesce(saas.customers.total_withdrawals, 0)),
         total_bonus      = coalesce(excluded.total_bonus, saas.customers.total_bonus),
         -- Forward-only: don't let an older CSV snapshot move the last-deposit/withdrawal
         -- marker backward over what live webhooks already recorded.
@@ -202,16 +204,19 @@ export class ImportsService {
         current_category = excluded.current_category,
         ftd_date         = coalesce(excluded.ftd_date, saas.customers.ftd_date),
         ftd_amount       = coalesce(excluded.ftd_amount, saas.customers.ftd_amount),
-        total_deposits   = coalesce(excluded.total_deposits, saas.customers.total_deposits),
+        -- Forward-only: the legacy snapshot is frozen, so it must never pull a total BACK
+        -- below what live webhooks already recorded. greatest() keeps the larger of the two.
+        total_deposits   = greatest(coalesce(excluded.total_deposits, 0), coalesce(saas.customers.total_deposits, 0)),
         -- deposit_count drives the lead/depositor stage. The frozen legacy snapshot often
         -- carries a last-deposit date but NO count, so never clobber a real count with null,
         -- and imply at least 1 deposit when there's a last-deposit (else players strand as leads).
         deposit_count    = greatest(coalesce(excluded.deposit_count, 0), coalesce(saas.customers.deposit_count, 0),
              case when coalesce(excluded.last_deposit_at, saas.customers.last_deposit_at) is not null then 1 else 0 end),
-        total_withdrawals = coalesce(excluded.total_withdrawals, saas.customers.total_withdrawals),
+        total_withdrawals = greatest(coalesce(excluded.total_withdrawals, 0), coalesce(saas.customers.total_withdrawals, 0)),
         withdrawal_count = greatest(coalesce(excluded.withdrawal_count, 0), coalesce(saas.customers.withdrawal_count, 0),
              case when coalesce(excluded.last_withdrawal_at, saas.customers.last_withdrawal_at) is not null then 1 else 0 end),
-        net_pnl          = coalesce(excluded.net_pnl, saas.customers.net_pnl),
+        net_pnl          = greatest(coalesce(excluded.total_deposits, 0), coalesce(saas.customers.total_deposits, 0))
+                           - greatest(coalesce(excluded.total_withdrawals, 0), coalesce(saas.customers.total_withdrawals, 0)),
         total_bonus      = coalesce(excluded.total_bonus, saas.customers.total_bonus),
         -- Forward-only: the legacy users table is a frozen snapshot; never move the
         -- last-deposit/withdrawal marker BACKWARD over what live webhooks recorded.
