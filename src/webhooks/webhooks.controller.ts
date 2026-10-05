@@ -10,6 +10,9 @@ import { verifyWebhookSecret } from './webhook-secret';
 export class WebhooksController {
   // ponytail: process-local limiter; move to the API gateway/Redis when the backend runs on multiple instances.
   private readonly limits = new Map<string, { startedAt: number; count: number }>();
+  // Safety ceiling only — the provider bursts retries well above the old 120/min, which
+  // silently dropped real transactions. Keep it high; raise via env if a tenant needs more.
+  private readonly maxPerMinute = Number(process.env.WEBHOOK_RATE_LIMIT_PER_MIN) || 2000;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -33,11 +36,12 @@ export class WebhooksController {
     }
     const tenant = await this.prisma.tenant.findFirst({ where: { webhookKey, status: 'ACTIVE', webhookEnabled: true } });
     if (!tenant) throw new BadRequestException('Unknown or inactive tenant');
-    this.checkRateLimit(tenant.id);
     if (!verifyWebhookSecret(headerSecret || token, tenant.webhookSecretHash)) throw new UnauthorizedException('Invalid webhook secret');
 
-    // Log the raw payload for visibility/debugging (best-effort; never fails the webhook).
+    // Log the raw payload BEFORE the rate-limit check so that even dropped (429) webhooks
+    // stay visible for debugging (best-effort; never fails the webhook).
     this.logRaw(rawType, body);
+    this.checkRateLimit(tenant.id);
 
     // "update" doesn't say deposit vs withdrawal — work it out.
     const type = await this.resolveType(rawType, body, tenant.id);
@@ -119,6 +123,6 @@ export class WebhooksController {
       return;
     }
     current.count += 1;
-    if (current.count > 120) throw new HttpException('Webhook rate limit exceeded', HttpStatus.TOO_MANY_REQUESTS);
+    if (current.count > this.maxPerMinute) throw new HttpException('Webhook rate limit exceeded', HttpStatus.TOO_MANY_REQUESTS);
   }
 }
