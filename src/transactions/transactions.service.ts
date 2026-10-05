@@ -111,28 +111,41 @@ export class TransactionsService {
       orderBy: { occurredAt: 'desc' },
     });
     if (!last) return;
-    // deposit_count drives the lifecycle stage (Lead → FTD → Repeat → Regular). It's
-    // only seeded from the CSV import, so a lead who deposits via the live webhook
-    // keeps count 0 and stays "Lead" forever unless we bump it here. Forward-only via
-    // greatest(): raise an under-count from the ledger, never lower the imported total.
-    const ledgerCount = await this.prisma.transaction.count({
+    // deposit_count AND the lifetime amount are only seeded from the CSV import, so live
+    // webhook activity never raised them — a player could show "21 deposits / ₹30,000"
+    // while the ledger actually holds ₹344,000, which makes the 360 money cards contradict
+    // today/first/last. Move BOTH forward from the ledger via greatest(): raise an
+    // under-count/under-total, never lower the imported figure.
+    const agg = await this.prisma.transaction.aggregate({
       where: { tenantId, customerId, transactionType: type, isFinanciallySuccessful: true },
+      _count: true, _sum: { amount: true },
     });
+    const ledgerCount = agg._count;
+    const ledgerSum = new Prisma.Decimal(agg._sum.amount ?? 0);
     const c = await this.prisma.customer.findUnique({
       where: { id: customerId },
-      select: { lastDepositAt: true, lastWithdrawalAt: true, depositCount: true, withdrawalCount: true },
+      select: {
+        lastDepositAt: true, lastWithdrawalAt: true, depositCount: true, withdrawalCount: true,
+        totalDeposits: true, totalWithdrawals: true,
+      },
     });
+    const data: Prisma.CustomerUpdateInput = {};
     if (type === 'DEPOSIT') {
-      const data: Prisma.CustomerUpdateInput = {};
       if (!c?.lastDepositAt || c.lastDepositAt < last.occurredAt) { data.lastDepositAt = last.occurredAt; data.lastDepositAmount = last.amount; }
       if (ledgerCount > (c?.depositCount ?? 0)) data.depositCount = ledgerCount;
-      if (Object.keys(data).length) await this.prisma.customer.update({ where: { id: customerId }, data });
+      if (ledgerSum.greaterThan(c?.totalDeposits ?? 0)) {
+        data.totalDeposits = ledgerSum;
+        data.netPnl = ledgerSum.minus(c?.totalWithdrawals ?? 0);
+      }
     } else {
-      const data: Prisma.CustomerUpdateInput = {};
       if (!c?.lastWithdrawalAt || c.lastWithdrawalAt < last.occurredAt) { data.lastWithdrawalAt = last.occurredAt; data.lastWithdrawalAmount = last.amount; }
       if (ledgerCount > (c?.withdrawalCount ?? 0)) data.withdrawalCount = ledgerCount;
-      if (Object.keys(data).length) await this.prisma.customer.update({ where: { id: customerId }, data });
+      if (ledgerSum.greaterThan(c?.totalWithdrawals ?? 0)) {
+        data.totalWithdrawals = ledgerSum;
+        data.netPnl = new Prisma.Decimal(c?.totalDeposits ?? 0).minus(ledgerSum);
+      }
     }
+    if (Object.keys(data).length) await this.prisma.customer.update({ where: { id: customerId }, data });
   }
 
   async recomputeFtd(tenantId: string, customerId: string): Promise<void> {
