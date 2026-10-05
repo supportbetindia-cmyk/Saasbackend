@@ -73,7 +73,11 @@ export class TransactionsService {
           },
         },
         update: {
-          amount, currency: data.currency, occurredAt, rawStatus: data.rawStatus,
+          // Keep occurredAt at the first-seen (creation) time — do NOT move it to the
+          // approval moment. The provider sends no transaction date, so occurredAt is our
+          // processing time; anchoring it to the initial (pending) event keeps a deposit in
+          // the day it was created, matching how Get-ID groups its dashboard.
+          amount, currency: data.currency, rawStatus: data.rawStatus,
           normalizedStatus: normalized, isFinanciallySuccessful: successful, remarks: data.remarks,
           transactionType: type, customerId: customer.id,
         },
