@@ -44,6 +44,12 @@ export class ImportsService {
     const list = [...byId.values()];
     if (list.length === 0) return { received: rows.length, deduped: 0, processed: 0 };
 
+    // Date-only values ("06 Oct 2026") must be read as midnight in the TENANT's timezone,
+    // not UTC — otherwise an IST registration lands 5.5h in the future and drops out of
+    // "today" (registration_at < now fails) until mid-morning.
+    const tenant = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } });
+    const tz = tenant?.timezone || 'Asia/Kolkata';
+
     const str = (v: unknown) => (v == null ? '' : String(v));
     const externalUserId = list.map((r) => str(r.externalUserId).trim());
     const masterId = list.map((r) => str(r.masterId));
@@ -75,15 +81,15 @@ export class ImportsService {
       select gen_random_uuid()::text, $1, t.external_user_id,
              nullif(t.master_id, ''), nullif(t.name, ''), nullif(t.phone, ''),
              right(regexp_replace(coalesce(t.phone, ''), '[^0-9]', '', 'g'), 10),
-             nullif(t.registration_at, '')::timestamptz,
+             nullif(t.registration_at, '')::timestamp at time zone $21,
              nullif(t.account_status, ''), nullif(t.current_category, ''),
-             nullif(t.ftd_date, '')::timestamptz,
+             nullif(t.ftd_date, '')::timestamp at time zone $21,
              nullif(t.ftd_amount, '')::numeric,
              nullif(t.total_deposits, '')::numeric, nullif(t.deposit_count, '')::int,
              nullif(t.total_withdrawals, '')::numeric, nullif(t.withdrawal_count, '')::int,
              nullif(t.net_pnl, '')::numeric, nullif(t.total_bonus, '')::numeric,
-             nullif(t.last_deposit_at, '')::timestamptz, nullif(t.last_deposit_amount, '')::numeric,
-             nullif(t.last_withdrawal_at, '')::timestamptz, nullif(t.last_withdrawal_amount, '')::numeric,
+             nullif(t.last_deposit_at, '')::timestamp at time zone $21, nullif(t.last_deposit_amount, '')::numeric,
+             nullif(t.last_withdrawal_at, '')::timestamp at time zone $21, nullif(t.last_withdrawal_amount, '')::numeric,
              now(), now()
       from unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[],
                   $7::text[], $8::text[], $9::text[], $10::text[], $11::text[],
@@ -134,6 +140,7 @@ export class ImportsService {
       registrationAt, accountStatus, currentCategory, ftdDate, ftdAmount,
       totalDeposits, depositCount, totalWithdrawals, withdrawalCount, netPnl,
       totalBonus, lastDepositAt, lastDepositAmount, lastWithdrawalAt, lastWithdrawalAmount,
+      tz,
     );
     return { received: rows.length, deduped: list.length, processed };
   }
