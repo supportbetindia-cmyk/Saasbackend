@@ -153,13 +153,16 @@ export class TransactionsService {
       where: { tenantId, customerId, transactionType: 'DEPOSIT', isFinanciallySuccessful: true },
       orderBy: { occurredAt: 'asc' },
     });
+    if (!first) return;
+    // FTD never changes once it happens. Only set it if we don't have one, or the ledger
+    // reveals an EARLIER first deposit than what's stored — never push it forward, which
+    // would overwrite a real pre-webhook FTD with a later webhook deposit (and wrongly
+    // count an old player as a first-time depositor today).
+    const c = await this.prisma.customer.findUnique({ where: { id: customerId }, select: { ftdDate: true } });
+    if (c?.ftdDate && c.ftdDate <= first.occurredAt) return;
     await this.prisma.customer.update({
       where: { id: customerId },
-      data: {
-        ftdDate: first?.occurredAt ?? null,
-        ftdAmount: first?.amount ?? null,
-        ftdTransactionId: first?.id ?? null,
-      },
+      data: { ftdDate: first.occurredAt, ftdAmount: first.amount, ftdTransactionId: first.id },
     });
   }
 
