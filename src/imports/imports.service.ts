@@ -285,19 +285,15 @@ export class ImportsService {
         where (tenant_id::text = $2 or tenant_id is null)
           and transaction_id is not null and btrim(transaction_id) <> ''
           and user_id is not null and btrim(user_id) <> ''
+          -- Never re-import the period the Get-ID CSV history replaced (it would double-count).
+          and created_at > coalesce((select max(occurred_at) from saas.transactions
+                                     where tenant_id = $1 and source = 'csv:historical'), '-infinity')
         order by transaction_id, created_at desc
       ) t
       join saas.customers c on c.tenant_id = $1 and c.external_user_id = t.user_id
-      on conflict (tenant_id, source, external_transaction_id) do update set
-        customer_id               = excluded.customer_id,
-        transaction_type          = excluded.transaction_type,
-        amount                    = excluded.amount,
-        occurred_at               = excluded.occurred_at,
-        raw_status                = excluded.raw_status,
-        normalized_status         = excluded.normalized_status,
-        is_financially_successful = excluded.is_financially_successful,
-        remarks                   = excluded.remarks,
-        updated_at                = now();
+      -- The legacy source is a frozen snapshot; the saas ledger is the source of truth
+      -- once a row exists (webhooks/syncs may have approved it since), so never overwrite.
+      on conflict (tenant_id, source, external_transaction_id) do nothing;
     `;
     const processed = await this.prisma.$executeRawUnsafe(insertSql, tenantId, legacyTenant.id);
 
