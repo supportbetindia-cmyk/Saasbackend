@@ -14,7 +14,9 @@ function tzOffsetMinutes(tz: string, at: Date): number {
   });
   const p = Object.fromEntries(dtf.formatToParts(at).map((x) => [x.type, x.value]));
   const asUtc = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second);
-  return (asUtc - at.getTime()) / 60000;
+  // Round: `at` carries milliseconds the formatted parts drop, which would otherwise
+  // push "midnight" to 00:00:00.6xx and exclude CSV rows stamped at exact midnight.
+  return Math.round((asUtc - at.getTime()) / 60000);
 }
 
 export function computeRanges(
