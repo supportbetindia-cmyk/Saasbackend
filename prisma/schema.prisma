@@ -84,6 +84,7 @@ model TenantMembership {
   userId    String           @map("user_id")
   role      MembershipRole   @default(VIEWER)
   status    MembershipStatus @default(ACTIVE)
+  masterIds String[]         @default([]) @map("master_ids") // empty = all masters
   createdAt DateTime         @default(now()) @map("created_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)

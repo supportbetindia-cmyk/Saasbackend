@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { BadRequestException, Body, ConflictException, Controller, Delete, Get, NotFoundException, Param, Patch, Post, UseGuards } from '@nestjs/common';
-import { IsEmail, IsEnum } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsEmail, IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
 import { MembershipRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -14,7 +14,15 @@ import type { ActiveMembership, ActiveTenant, AuthUser } from '../auth/auth.type
 class InviteMemberDto {
   @IsEmail() email!: string;
   @IsEnum(MembershipRole) role!: MembershipRole;
+  // Masters this member may see; omitted/empty = all masters.
+  @IsOptional() @IsArray() @ArrayMaxSize(200) @IsString({ each: true }) @MaxLength(128, { each: true }) masterIds?: string[];
 }
+
+class ChangeMastersDto {
+  @IsArray() @ArrayMaxSize(200) @IsString({ each: true }) @MaxLength(128, { each: true }) masterIds!: string[];
+}
+
+const cleanMasters = (ids: string[] = []) => [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
 
 class ChangeRoleDto {
   @IsEnum(MembershipRole) role!: MembershipRole;
@@ -30,7 +38,7 @@ export class TeamController {
   async list(@CurrentTenant() tenant: ActiveTenant) {
     return this.prisma.tenantMembership.findMany({
       where: { tenantId: tenant.id, status: { in: ['ACTIVE', 'INVITED'] } },
-      select: { id: true, role: true, status: true, createdAt: true, user: { select: { id: true, email: true, name: true } } },
+      select: { id: true, role: true, status: true, masterIds: true, createdAt: true, user: { select: { id: true, email: true, name: true } } },
       orderBy: { createdAt: 'asc' },
     });
   }
@@ -44,6 +52,7 @@ export class TeamController {
   ) {
     if (dto.role === 'OWNER' && actorMembership.role !== 'OWNER') throw new BadRequestException('Only an owner can invite another owner');
     const email = dto.email.trim().toLowerCase();
+    const masterIds = cleanMasters(dto.masterIds);
     const existingUser = await this.prisma.user.findUnique({ where: { email } });
     const existingMembership = existingUser && await this.prisma.tenantMembership.findUnique({
       where: { tenantId_userId: { tenantId: tenant.id, userId: existingUser.id } },
@@ -54,15 +63,15 @@ export class TeamController {
     const membership = await this.prisma.$transaction(async (tx) => {
       const user = existingUser ?? await tx.user.create({ data: { email, supabaseUserId: `invite:${randomUUID()}` } });
       return tx.tenantMembership.create({
-        data: { tenantId: tenant.id, userId: user.id, role: dto.role, status: registered ? 'ACTIVE' : 'INVITED' },
-        select: { id: true, role: true, status: true, createdAt: true, user: { select: { id: true, email: true, name: true } } },
+        data: { tenantId: tenant.id, userId: user.id, role: dto.role, masterIds, status: registered ? 'ACTIVE' : 'INVITED' },
+        select: { id: true, role: true, status: true, masterIds: true, createdAt: true, user: { select: { id: true, email: true, name: true } } },
       });
     });
 
     const emailSent = registered ? false : await this.sendSupabaseInvite(email);
     await this.audit.log({
       tenantId: tenant.id, actorUserId: actor.id, action: 'team.member.invited', entityType: 'membership', entityId: membership.id,
-      newValue: { email, role: dto.role, status: membership.status, emailSent },
+      newValue: { email, role: dto.role, masterIds, status: membership.status, emailSent },
     });
     return { ...membership, emailSent };
   }
@@ -81,6 +90,20 @@ export class TeamController {
     const updated = await this.prisma.tenantMembership.update({ where: { id }, data: { role: dto.role }, include: { user: true } });
     await this.audit.log({ tenantId: tenant.id, actorUserId: actor.id, action: 'team.member.role_changed', entityType: 'membership', entityId: id, oldValue: { role: target.role }, newValue: { role: dto.role } });
     return updated;
+  }
+
+  @Patch(':id/masters')
+  async changeMasters(
+    @Param('id') id: string,
+    @CurrentTenant() tenant: ActiveTenant,
+    @CurrentUser() actor: AuthUser,
+    @Body() dto: ChangeMastersDto,
+  ) {
+    const target = await this.membership(tenant.id, id);
+    const masterIds = cleanMasters(dto.masterIds);
+    await this.prisma.tenantMembership.update({ where: { id }, data: { masterIds } });
+    await this.audit.log({ tenantId: tenant.id, actorUserId: actor.id, action: 'team.member.masters_changed', entityType: 'membership', entityId: id, oldValue: { masterIds: target.masterIds }, newValue: { masterIds } });
+    return { id, masterIds };
   }
 
   @Delete(':id')

@@ -4,11 +4,11 @@ import { AuthGuard } from '../auth/auth.guard';
 import { TenantGuard } from '../auth/tenant.guard';
 import { PermissionsGuard, RequirePermissions } from '../auth/permissions.guard';
 import { PERMISSIONS } from '../auth/permissions';
-import { CurrentTenant, CurrentUser } from '../auth/decorators';
-import type { ActiveTenant, AuthUser } from '../auth/auth.types';
+import { CurrentMembership, CurrentTenant, CurrentUser } from '../auth/decorators';
+import type { ActiveMembership, ActiveTenant, AuthUser } from '../auth/auth.types';
 import { CustomersService } from './customers.service';
 import { AuditService } from '../audit/audit.service';
-import { MasterIdPipe } from './master-scope';
+import { MasterId, MasterScoped } from './master-scope';
 
 class CreateCustomerDto {
   @IsOptional() @IsString() externalUserId?: string;
@@ -29,6 +29,7 @@ export class CustomersController {
 
   @Get()
   @RequirePermissions(PERMISSIONS.customersRead)
+  @MasterScoped()
   list(
     @CurrentTenant() tenant: ActiveTenant,
     @Query('search') search?: string,
@@ -40,7 +41,7 @@ export class CustomersController {
     @Query('tier') tier?: string,
     @Query('quietDays') quietDays?: string,
     @Query('hasPhone') hasPhone?: string,
-    @Query('masterId', MasterIdPipe) masterId?: string,
+    @MasterId() masterId?: string,
   ) {
     return this.customers.list(tenant.id, {
       search,
@@ -62,6 +63,7 @@ export class CustomersController {
   @RequirePermissions(PERMISSIONS.customersExport)
   @Header('Content-Type', 'text/csv; charset=utf-8')
   @Header('Content-Disposition', 'attachment; filename="players.csv"')
+  @MasterScoped()
   exportCsv(
     @CurrentTenant() tenant: ActiveTenant,
     @Query('search') search?: string,
@@ -71,7 +73,7 @@ export class CustomersController {
     @Query('tier') tier?: string,
     @Query('quietDays') quietDays?: string,
     @Query('hasPhone') hasPhone?: string,
-    @Query('masterId', MasterIdPipe) masterId?: string,
+    @MasterId() masterId?: string,
   ) {
     return this.customers.exportCsv(tenant.id, {
       search, stage, activity, tier, masterId,
@@ -81,10 +83,14 @@ export class CustomersController {
     });
   }
 
+  // Master picker options. Restricted members get only their own masters, and
+  // `restricted` tells the UI to drop the "All Masters" option.
   @Get('masters')
   @RequirePermissions(PERMISSIONS.customersRead)
-  masters(@CurrentTenant() tenant: ActiveTenant) {
-    return this.customers.masters(tenant.id);
+  @MasterScoped()
+  async masters(@CurrentTenant() tenant: ActiveTenant, @CurrentMembership() membership: ActiveMembership) {
+    if (membership.masterIds.length) return { masters: membership.masterIds, restricted: true };
+    return { masters: await this.customers.masters(tenant.id), restricted: false };
   }
 
   @Post()
@@ -100,7 +106,8 @@ export class CustomersController {
 
   @Get(':id')
   @RequirePermissions(PERMISSIONS.customersRead)
-  get360(@CurrentTenant() tenant: ActiveTenant, @Param('id') id: string, @Query('masterId', MasterIdPipe) masterId?: string) {
+  @MasterScoped()
+  get360(@CurrentTenant() tenant: ActiveTenant, @Param('id') id: string, @MasterId() masterId?: string) {
     return this.customers.get360(tenant.id, id, masterId);
   }
 
@@ -113,12 +120,13 @@ export class CustomersController {
 
   @Get(':id/transactions')
   @RequirePermissions(PERMISSIONS.customersRead)
+  @MasterScoped()
   transactions(
     @CurrentTenant() tenant: ActiveTenant,
     @Param('id') id: string,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
-    @Query('masterId', MasterIdPipe) masterId?: string,
+    @MasterId() masterId?: string,
   ) {
     return this.customers.transactionsFor(tenant.id, id, { page: Number(page) || undefined, pageSize: Number(pageSize) || undefined }, masterId);
   }

@@ -7,7 +7,7 @@ import { CurrentTenant } from '../auth/decorators';
 import type { ActiveTenant } from '../auth/auth.types';
 import { DashboardService } from './dashboard.service';
 import type { PeriodKey } from './periods';
-import { MasterIdPipe } from '../customers/master-scope';
+import { MasterId, MasterScoped } from '../customers/master-scope';
 
 const PERIODS: PeriodKey[] = ['today', 'week', 'month', 'quarter', 'year', 'custom'];
 
@@ -18,12 +18,13 @@ export class DashboardController {
 
   @Get()
   @RequirePermissions(PERMISSIONS.financialDashboardRead)
+  @MasterScoped()
   overview(
     @CurrentTenant() tenant: ActiveTenant,
     @Query('period') period?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
-    @Query('masterId', MasterIdPipe) masterId?: string,
+    @MasterId() masterId?: string,
   ) {
     const key: PeriodKey = PERIODS.includes(period as PeriodKey) ? (period as PeriodKey) : 'month';
     return this.dashboard.overview(tenant.id, key, from, to, masterId);
@@ -32,13 +33,14 @@ export class DashboardController {
   // The records behind one KPI card (metric = deposits|withdrawals|transactions|new|ftd|active).
   @Get('details')
   @RequirePermissions(PERMISSIONS.financialDashboardRead)
+  @MasterScoped()
   details(
     @CurrentTenant() tenant: ActiveTenant,
     @Query('metric') metric: string,
     @Query('period') period?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
-    @Query('masterId', MasterIdPipe) masterId?: string,
+    @MasterId() masterId?: string,
   ) {
     const key: PeriodKey = PERIODS.includes(period as PeriodKey) ? (period as PeriodKey) : 'month';
     return this.dashboard.details(tenant.id, key, metric ?? 'deposits', from, to, masterId);
@@ -47,9 +49,10 @@ export class DashboardController {
   // Player-analytics page: lifetime totals + per-user table, from the live saas tables.
   @Get('user-analytics')
   @RequirePermissions(PERMISSIONS.customersRead)
+  @MasterScoped()
   userAnalytics(
     @CurrentTenant() tenant: ActiveTenant,
-    @Query('masterId', MasterIdPipe) masterId?: string,
+    @MasterId() masterId?: string,
   ) {
     return this.dashboard.userAnalytics(tenant.id, masterId);
   }
@@ -57,11 +60,12 @@ export class DashboardController {
   // Per-user breakdown for a date range (used by the page's range picker).
   @Get('user-analytics/breakdown')
   @RequirePermissions(PERMISSIONS.customersRead)
+  @MasterScoped()
   userBreakdown(
     @CurrentTenant() tenant: ActiveTenant,
     @Query('from') from: string,
     @Query('to') to: string,
-    @Query('masterId', MasterIdPipe) masterId?: string,
+    @MasterId() masterId?: string,
   ) {
     return this.dashboard.userBreakdown(tenant.id, from, to, masterId);
   }
