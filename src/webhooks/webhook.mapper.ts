@@ -3,7 +3,7 @@ import type { IngestInput } from '../transactions/transactions.service';
 
 export type WebhookType = 'deposit' | 'withdrawal';
 
-function pick(body: Record<string, unknown>, ...keys: string[]): string | null {
+export function pick(body: Record<string, unknown>, ...keys: string[]): string | null {
   for (const key of keys) {
     const value = body[key];
     if (value !== undefined && value !== null && value !== '') return String(value).trim();
@@ -43,3 +43,15 @@ export function webhookFingerprint(type: WebhookType, input: IngestInput, body: 
   };
 }
 
+
+/** Registration time from the payload. Values without an offset are Get-ID's IST wall
+ * clock; missing/unparseable → the webhook's arrival (it is sent at sign-up). */
+export function registrationTime(raw: string | null, now = new Date()): Date {
+  if (!raw) return now;
+  let iso = raw.trim().replace(' ', 'T');
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) iso += 'T00:00:00';
+  // ponytail: fixed IST for offset-less values; use the tenant timezone if a non-IST tenant onboards.
+  if (!/(Z|[+-]\d\d:?\d\d)$/.test(iso)) iso += '+05:30';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? now : d;
+}

@@ -35,13 +35,35 @@ test('routes a webhook only to the company identified by its key and secret', as
   };
   const prisma = {
     tenant: { findFirst: async ({ where }) => tenants[where.webhookKey] ?? null },
+    $executeRawUnsafe: async () => 0, // raw-payload log (best-effort)
     webhookEvent: { findUnique: async () => null, upsert: async () => ({}) },
   };
   const transactions = { ingest: async (tenantId) => { ingested.push(tenantId); return { id: 'txn-1' }; } };
-  const controller = new WebhooksController(prisma, transactions);
+  const controller = new WebhooksController(prisma, transactions, { notifyTransaction: async () => {} });
   const payload = { User_id: 'player-1', Transaction_id: 'external-1', Amount: '100' };
 
-  await controller.receive('key-a', 'deposit', companyA.secret, payload);
-  await assert.rejects(() => controller.receive('key-b', 'deposit', companyA.secret, payload), /Invalid webhook secret/);
+  await controller.receive('key-a', 'deposit', companyA.secret, undefined, payload);
+  await assert.rejects(() => controller.receive('key-b', 'deposit', companyA.secret, undefined, payload), /Invalid webhook secret/);
   assert.deepEqual(ingested, ['tenant-a']);
+});
+
+test('register converts a WhatsApp lead with the same phone instead of duplicating it', async () => {
+  const { hash, secret } = createWebhookSecret();
+  const updates = [];
+  const prisma = {
+    tenant: { findFirst: async () => ({ id: 't1', webhookSecretHash: hash }) },
+    $executeRawUnsafe: async () => 0,
+    customer: {
+      findUnique: async () => null,
+      findFirst: async ({ where }) => (where.phoneNormalized === '9876543210' ? { id: 'lead-1' } : null),
+      update: async (args) => { updates.push(args); return {}; },
+      create: async () => { throw new Error('should not create'); },
+    },
+  };
+  const controller = new WebhooksController(prisma, {}, {});
+  const res = await controller.receive('k', 'register', undefined, secret,
+    { user_id: 'abc123', mobile_number: '+91 98765 43210', Branch_id: 'ads001', registered_at: '2026-10-09 14:30:00' });
+  assert.equal(res.action, 'lead_converted');
+  assert.equal(updates[0].data.externalUserId, 'abc123');
+  assert.equal(updates[0].data.registrationAt.toISOString(), '2026-10-09T09:00:00.000Z');
 });

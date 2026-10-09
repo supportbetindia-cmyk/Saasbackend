@@ -2,8 +2,8 @@ import { BadRequestException, Body, Controller, Headers, HttpException, HttpStat
 import { PrismaService } from '../prisma/prisma.service';
 import { TransactionsService } from '../transactions/transactions.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
-import { normalizeType } from '../transactions/status';
-import { mapWebhook, webhookFingerprint, type WebhookType } from './webhook.mapper';
+import { normalizePhone, normalizeType } from '../transactions/status';
+import { mapWebhook, pick, registrationTime, webhookFingerprint, type WebhookType } from './webhook.mapper';
 import { verifyWebhookSecret } from './webhook-secret';
 
 @Controller('webhooks')
@@ -20,7 +20,7 @@ export class WebhooksController {
     private readonly whatsapp: WhatsappService,
   ) {}
 
-  // One endpoint for deposit, withdrawal, AND update. The provider sends the secret
+  // One endpoint for deposit, withdrawal, update AND register. The provider sends the secret
   // either as an `X-Webhook-Secret` header OR as a `?token=` query param (Get-ID
   // only supports the URL token) — both are accepted.
   @Post(':webhookKey/:type')
@@ -31,8 +31,8 @@ export class WebhooksController {
     @Query('token') token: string | undefined,
     @Body() body: Record<string, unknown>,
   ) {
-    if (rawType !== 'deposit' && rawType !== 'withdrawal' && rawType !== 'update') {
-      throw new BadRequestException('type must be deposit, withdrawal or update');
+    if (!['deposit', 'withdrawal', 'update', 'register'].includes(rawType)) {
+      throw new BadRequestException('type must be deposit, withdrawal, update or register');
     }
     const tenant = await this.prisma.tenant.findFirst({ where: { webhookKey, status: 'ACTIVE', webhookEnabled: true } });
     if (!tenant) throw new BadRequestException('Unknown or inactive tenant');
@@ -42,6 +42,7 @@ export class WebhooksController {
     // stay visible for debugging (best-effort; never fails the webhook).
     this.logRaw(rawType, body);
     this.checkRateLimit(tenant.id);
+    if (rawType === 'register') return this.register(tenant.id, body);
 
     // "update" doesn't say deposit vs withdrawal — work it out.
     const type = await this.resolveType(rawType, body, tenant.id);
@@ -84,6 +85,37 @@ export class WebhooksController {
       });
       throw error;
     }
+  }
+
+  /** New sign-up from the platform. Idempotent: updates the player if known, converts a
+   * WhatsApp lead with the same phone (no external id yet), else creates the player. */
+  private async register(tenantId: string, body: Record<string, unknown>) {
+    const externalUserId = pick(body, 'user_id', 'User_id');
+    if (!externalUserId) throw new BadRequestException('Missing user_id');
+    const phone = pick(body, 'mobile_number', 'Mobile_number', 'phone');
+    const phoneNormalized = normalizePhone(phone);
+    const data = {
+      masterId: pick(body, 'Branch_id', 'branch_id'),
+      name: pick(body, 'User_name', 'user_name', 'name'),
+      phone, phoneNormalized,
+      email: pick(body, 'email', 'Email'),
+    };
+    const registrationAt = registrationTime(pick(body, 'registered_at', 'created_at', 'Register_date', 'registration_date'));
+    const strip = <T extends object>(o: T) => Object.fromEntries(Object.entries(o).filter(([, v]) => v != null));
+
+    const existing = await this.prisma.customer.findUnique({ where: { tenantId_externalUserId: { tenantId, externalUserId } } });
+    if (existing) {
+      // Retries must not move the sign-up date, so keep the first one.
+      await this.prisma.customer.update({ where: { id: existing.id }, data: { ...strip(data), registrationAt: existing.registrationAt ?? registrationAt } });
+      return { ok: true, type: 'register', action: 'updated', customerId: existing.id };
+    }
+    const lead = phoneNormalized && await this.prisma.customer.findFirst({ where: { tenantId, externalUserId: null, phoneNormalized } });
+    if (lead) {
+      await this.prisma.customer.update({ where: { id: lead.id }, data: { ...strip(data), externalUserId, registrationAt } });
+      return { ok: true, type: 'register', action: 'lead_converted', customerId: lead.id };
+    }
+    const created = await this.prisma.customer.create({ data: { tenantId, externalUserId, ...data, registrationAt } });
+    return { ok: true, type: 'register', action: 'created', customerId: created.id };
   }
 
   /** deposit/withdrawal are explicit; "update" is inferred from the body, then the
