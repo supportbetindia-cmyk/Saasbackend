@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { sendWhatsAppTemplate } from './interakt';
 import { resolveInteraktKey, type SendRole } from './interakt-keys';
+import { automationAllowed } from './automation-switch';
 
 // Give up after this many total tries (1 original send + retries). Past this the row
 // stays 'failed' and is never picked up again — a "dead letter" you can inspect.
@@ -36,9 +37,13 @@ export class MessageRetryService {
   /** One pass: claim due failures, try to re-send each, record the outcome. Returns a
    * small summary for logging. Safe to run concurrently — the claim locks its rows. */
   async runOnce(): Promise<{ claimed: number; sent: number; failed: number; skipped: number }> {
+    // Master switch off → don't even claim; failed rows wait until it's back on.
+    if (!(await automationAllowed(this.prisma))) return { claimed: 0, sent: 0, failed: 0, skipped: 0 };
     const rows = await this.claimDue();
     let sent = 0, failed = 0, skipped = 0;
     for (const r of rows) {
+      const kind = r.event_type === 'deposit' || r.event_type === 'withdrawal' ? r.event_type : null;
+      if (kind && !(await automationAllowed(this.prisma, `automation_${kind}`))) { skipped++; continue; }
       const env = this.envelope(r.payload);
       // Legacy rows (failed before we stored a replay envelope) can't be replayed.
       // Don't burn attempts forever on them — push them far out so they drop off.

@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { normalizePhone } from '../whatsapp/message';
 import { sendWhatsAppTemplate } from '../whatsapp/interakt';
+import { automationAllowed } from '../whatsapp/automation-switch';
 
 // Automatic win-back: message players who went inactive (7–90 days since their last
 // transaction) at most once every 7 days, from the tenant's retention account.
@@ -66,6 +67,7 @@ export class WinbackService {
 
   /** Send the win-back to this tenant's eligible inactive players (best-effort, capped). */
   async runTenant(tenantId: string, cap = DEFAULT_CAP): Promise<WinbackResult> {
+    if (!(await automationAllowed(this.prisma, 'winback_enabled'))) return { eligible: 0, sent: 0, failed: 0, skipped: 0, reason: 'automation switched off' };
     const { apiKey, templateName, lang } = await this.config(tenantId);
     if (!apiKey || !templateName) return { eligible: 0, sent: 0, failed: 0, skipped: 0, reason: 'no enabled retention account' };
 

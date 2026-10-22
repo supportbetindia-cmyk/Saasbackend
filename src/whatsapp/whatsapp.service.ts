@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { buildTransactionMessage, DEFAULT_TEMPLATES, type Templates, type TxnType } from './message';
 import { sendWhatsAppTemplate } from './interakt';
+import { automationAllowed } from './automation-switch';
 
 @Injectable()
 export class WhatsappService {
@@ -38,6 +39,9 @@ export class WhatsappService {
    */
   async notifyTransaction(tenantId: string, type: TxnType, body: Record<string, unknown>): Promise<void> {
     try {
+      // Honour the Automations page switches (master + deposit/withdrawal). Skipped sends
+      // aren't logged, so turning the switch back on never replays old messages.
+      if (!(await automationAllowed(this.prisma, `automation_${type}`))) return;
       const { apiKey, templates } = await this.config(tenantId);
       if (!apiKey) return; // not configured yet — silently skip
       const msg = buildTransactionMessage(type, body, templates);

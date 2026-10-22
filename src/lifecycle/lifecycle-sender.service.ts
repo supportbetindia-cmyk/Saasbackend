@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { normalizePhone } from '../whatsapp/message';
 import { sendWhatsAppTemplate } from '../whatsapp/interakt';
+import { automationAllowed } from '../whatsapp/automation-switch';
 import { LifecycleService } from './lifecycle.service';
 
 // Which Interakt template each stage sends (the doc's primary template per stage).
@@ -123,6 +124,7 @@ export class LifecycleSenderService {
 
   /** Run all stages for a tenant: resolve each stage's template, send, aggregate. */
   async runTenant(tenantId: string): Promise<{ configured: boolean; results: StageResult[] }> {
+    if (!(await automationAllowed(this.prisma, 'campaigns_enabled'))) return { configured: true, results: [] };
     const { apiKey, templates, lang } = await this.config(tenantId);
     if (!apiKey) return { configured: false, results: [] };
     const cfg = await this.lifecycle.getConfig(tenantId);
