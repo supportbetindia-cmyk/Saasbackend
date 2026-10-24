@@ -204,11 +204,13 @@ export class ImportsService {
       on conflict (tenant_id, external_user_id) do update set
         master_id        = coalesce(nullif(excluded.master_id, ''), saas.customers.master_id),
         name             = coalesce(excluded.name, saas.customers.name),
-        phone            = excluded.phone,
-        phone_normalized = excluded.phone_normalized,
-        registration_at  = excluded.registration_at,
-        account_status   = excluded.account_status,
-        current_category = excluded.current_category,
+        -- The frozen snapshot only fills gaps: live data (webhooks, CSV uploads, the
+        -- classifier) owns these once set, so never overwrite them with stale values.
+        phone            = coalesce(saas.customers.phone, excluded.phone),
+        phone_normalized = coalesce(saas.customers.phone_normalized, excluded.phone_normalized),
+        registration_at  = coalesce(saas.customers.registration_at, excluded.registration_at),
+        account_status   = coalesce(saas.customers.account_status, excluded.account_status),
+        current_category = coalesce(saas.customers.current_category, excluded.current_category),
         ftd_date         = coalesce(excluded.ftd_date, saas.customers.ftd_date),
         ftd_amount       = coalesce(excluded.ftd_amount, saas.customers.ftd_amount),
         -- Forward-only: the legacy snapshot is frozen, so it must never pull a total BACK
