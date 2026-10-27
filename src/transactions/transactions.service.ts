@@ -244,4 +244,34 @@ export class TransactionsService {
     ]);
     return { data, page, pageSize, total };
   }
+
+  /** Flat rows for a CSV export of the CURRENTLY FILTERED transactions (same date
+   * window + type/status/search + master scope the dashboard uses). Capped for safety. */
+  async exportRows(tenantId: string, opts: { fromMs: number | null; toMs: number; type?: string; status?: string; search?: string; masterId?: string }) {
+    const CAP = 100_000;
+    const type = normalizeType(opts.type);
+    const where: Prisma.TransactionWhereInput = {
+      ...transactionScope(tenantId, opts.masterId),
+      occurredAt: { ...(opts.fromMs != null ? { gte: new Date(opts.fromMs) } : {}), lt: new Date(opts.toMs) },
+      ...(type ? { transactionType: type as TransactionType } : {}),
+      ...(opts.status ? { normalizedStatus: opts.status.toUpperCase() as never } : {}),
+      ...(opts.search ? { externalTransactionId: { contains: opts.search.trim(), mode: 'insensitive' } } : {}),
+    };
+    const rows = await this.prisma.transaction.findMany({
+      where,
+      orderBy: { occurredAt: 'desc' },
+      take: CAP,
+      include: { customer: { select: { name: true, phone: true, externalUserId: true } } },
+    });
+    return rows.map((r) => ({
+      transaction_id: r.externalTransactionId ?? '',
+      type: r.transactionType.toLowerCase(),
+      user_id: r.customer?.externalUserId ?? '',
+      user_name: r.customer?.name ?? '',
+      phone: r.customer?.phone ?? '',
+      amount: Number(r.amount),
+      status: String(r.normalizedStatus).toLowerCase(),
+      occurred_at: r.occurredAt.toISOString(),
+    }));
+  }
 }
