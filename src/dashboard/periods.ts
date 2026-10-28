@@ -19,6 +19,14 @@ function tzOffsetMinutes(tz: string, at: Date): number {
   return Math.round((asUtc - at.getTime()) / 60000);
 }
 
+/** Parse a boundary that may be an epoch-ms string (what the UI sends) OR an ISO
+ * date string. `new Date("1793039400000")` is Invalid — we must Number() ms first. */
+function parseBoundary(v: string): Date {
+  const s = v.trim();
+  if (/^\d+$/.test(s)) return new Date(Number(s)); // epoch ms
+  return new Date(s); // ISO / date string
+}
+
 export function computeRanges(
   tz: string,
   period: PeriodKey,
@@ -27,8 +35,11 @@ export function computeRanges(
   customTo?: string,
 ): PeriodRanges {
   if (period === 'custom' && customFrom && customTo) {
-    const start = new Date(customFrom);
-    const end = new Date(customTo);
+    const start = parseBoundary(customFrom);
+    const end = parseBoundary(customTo);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      throw new Error('Invalid custom date range');
+    }
     const span = end.getTime() - start.getTime();
     return {
       label: 'Custom period',
