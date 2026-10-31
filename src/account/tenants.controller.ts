@@ -18,7 +18,9 @@ class CreateTenantDto {
 
 class UpdateSettingsDto {
   // Day a "week" begins for this company's reports: 0=Sun .. 6=Sat.
-  @IsInt() @Min(0) @Max(6) weekStartDay!: number;
+  @IsOptional() @IsInt() @Min(0) @Max(6) weekStartDay?: number;
+  // Loss commission rate (%) paid to players in net loss.
+  @IsOptional() @IsInt() @Min(0) @Max(100) lossCommissionPct?: number;
 }
 
 @Controller('tenants')
@@ -66,7 +68,7 @@ export class TenantsController {
     return { tenant, role: membership.role };
   }
 
-  // Editable company settings (Admin panel). Currently just the week-start day.
+  // Editable company settings (Admin panel): week-start day, loss-commission %.
   @Put('current/settings')
   @UseGuards(AuthGuard, TenantGuard, PermissionsGuard)
   @RequirePermissions(PERMISSIONS.integrationsManage)
@@ -75,14 +77,19 @@ export class TenantsController {
     @CurrentUser() user: AuthUser,
     @Body() dto: UpdateSettingsDto,
   ) {
+    // Only touch the fields actually sent, so each setting can be saved on its own.
+    const data: { weekStartDay?: number; lossCommissionPct?: number } = {};
+    if (dto.weekStartDay !== undefined) data.weekStartDay = dto.weekStartDay;
+    if (dto.lossCommissionPct !== undefined) data.lossCommissionPct = dto.lossCommissionPct;
+
     const updated = await this.prisma.tenant.update({
       where: { id: tenant.id },
-      data: { weekStartDay: dto.weekStartDay },
-      select: { weekStartDay: true },
+      data,
+      select: { weekStartDay: true, lossCommissionPct: true },
     });
     await this.audit.log({
       tenantId: tenant.id, actorUserId: user.id, action: 'tenant.settings_updated',
-      entityType: 'tenant', entityId: tenant.id, newValue: { weekStartDay: updated.weekStartDay },
+      entityType: 'tenant', entityId: tenant.id, newValue: updated,
     });
     return updated;
   }

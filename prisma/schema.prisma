@@ -48,6 +48,8 @@ model Tenant {
   currency  String       @default("INR")
   // Day a "week" begins for this company's reports: 0=Sun .. 6=Sat. Default Monday.
   weekStartDay Int        @default(1) @map("week_start_day")
+  // Loss commission rate (%) paid to players in net loss. Default 3%.
+  lossCommissionPct Int   @default(3) @map("loss_commission_pct")
   webhookKey        String  @unique @default(dbgenerated("gen_random_uuid()::text")) @map("webhook_key")
   webhookSecretHash String? @map("webhook_secret_hash")
   webhookEnabled    Boolean @default(true) @map("webhook_enabled")

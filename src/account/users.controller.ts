@@ -17,7 +17,7 @@ export class UsersController {
     });
     return {
       user,
-      tenants: memberships.map((m) => ({ id: m.tenant.id, name: m.tenant.name, role: m.role, weekStartDay: m.tenant.weekStartDay })),
+      tenants: memberships.map((m) => ({ id: m.tenant.id, name: m.tenant.name, role: m.role, weekStartDay: m.tenant.weekStartDay, lossCommissionPct: m.tenant.lossCommissionPct })),
     };
   }
 }
