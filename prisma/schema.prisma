@@ -46,6 +46,8 @@ model Tenant {
   status    TenantStatus @default(ACTIVE)
   timezone  String       @default("Asia/Kolkata")
   currency  String       @default("INR")
+  // Day a "week" begins for this company's reports: 0=Sun .. 6=Sat. Default Monday.
+  weekStartDay Int        @default(1) @map("week_start_day")
   webhookKey        String  @unique @default(dbgenerated("gen_random_uuid()::text")) @map("webhook_key")
   webhookSecretHash String? @map("webhook_secret_hash")
   webhookEnabled    Boolean @default(true) @map("webhook_enabled")
