@@ -1,5 +1,5 @@
-import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
-import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { Body, Controller, Get, Post, Put, UseGuards } from '@nestjs/common';
+import { IsInt, IsNotEmpty, IsOptional, IsString, Max, Min } from 'class-validator';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { AuthGuard } from '../auth/auth.guard';
@@ -14,6 +14,11 @@ class CreateTenantDto {
   @IsString() @IsNotEmpty() name!: string;
   @IsOptional() @IsString() timezone?: string;
   @IsOptional() @IsString() currency?: string;
+}
+
+class UpdateSettingsDto {
+  // Day a "week" begins for this company's reports: 0=Sun .. 6=Sat.
+  @IsInt() @Min(0) @Max(6) weekStartDay!: number;
 }
 
 @Controller('tenants')
@@ -59,6 +64,27 @@ export class TenantsController {
   @RequirePermissions(PERMISSIONS.customersRead)
   current(@CurrentTenant() tenant: ActiveTenant, @CurrentMembership() membership: ActiveMembership) {
     return { tenant, role: membership.role };
+  }
+
+  // Editable company settings (Admin panel). Currently just the week-start day.
+  @Put('current/settings')
+  @UseGuards(AuthGuard, TenantGuard, PermissionsGuard)
+  @RequirePermissions(PERMISSIONS.integrationsManage)
+  async updateSettings(
+    @CurrentTenant() tenant: ActiveTenant,
+    @CurrentUser() user: AuthUser,
+    @Body() dto: UpdateSettingsDto,
+  ) {
+    const updated = await this.prisma.tenant.update({
+      where: { id: tenant.id },
+      data: { weekStartDay: dto.weekStartDay },
+      select: { weekStartDay: true },
+    });
+    await this.audit.log({
+      tenantId: tenant.id, actorUserId: user.id, action: 'tenant.settings_updated',
+      entityType: 'tenant', entityId: tenant.id, newValue: { weekStartDay: updated.weekStartDay },
+    });
+    return updated;
   }
 
   @Get('current/webhooks')
