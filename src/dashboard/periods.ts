@@ -33,6 +33,7 @@ export function computeRanges(
   now: Date = new Date(),
   customFrom?: string,
   customTo?: string,
+  weekStartDay = 1, // 0=Sun .. 6=Sat; the day a "week" begins. Default Monday (unchanged).
 ): PeriodRanges {
   if (period === 'custom' && customFrom && customTo) {
     const start = parseBoundary(customFrom);
@@ -69,9 +70,10 @@ export function computeRanges(
       break;
     }
     case 'week': {
-      const mondayOffset = (dow + 6) % 7; // days since Monday
-      curStart = toUtc(Date.UTC(y, m, d - mondayOffset));
-      prevStart = toUtc(Date.UTC(y, m, d - mondayOffset - 7));
+      // Days since the configured week-start day. Monday (1) => (dow+6)%7, as before.
+      const weekOffset = (dow - weekStartDay + 7) % 7;
+      curStart = toUtc(Date.UTC(y, m, d - weekOffset));
+      prevStart = toUtc(Date.UTC(y, m, d - weekOffset - 7));
       label = 'This week vs last week';
       break;
     }

@@ -25,3 +25,20 @@ test('named periods still work', () => {
 test('invalid custom range throws instead of silently producing NaN', () => {
   assert.throws(() => computeRanges('Asia/Kolkata', 'custom', new Date(), 'nonsense', 'also-bad'));
 });
+
+test('week starts on the configured day (IST), default stays Monday', () => {
+  const now = new Date('2026-10-28T06:30:00.000Z'); // any day; result must land on the chosen weekday
+  const istDow = (ms) => new Date(ms + 330 * 60000).getUTCDay(); // 0=Sun..6=Sat in IST
+  // The computed week-start lands exactly on the configured weekday, whatever today is.
+  for (const ws of [0, 1, 2, 5]) { // Sun, Mon, Tue, Fri
+    const r = computeRanges('Asia/Kolkata', 'week', now, undefined, undefined, ws);
+    assert.equal(istDow(r.current.start.getTime()), ws, `start day for ws=${ws}`);
+    assert.equal(istDow(r.previous.start.getTime()), ws, `prev start day for ws=${ws}`);
+    assert.equal(r.current.start.getTime() - r.previous.start.getTime(), 7 * 86_400_000, `one week apart ws=${ws}`);
+  }
+  // Omitting the param == Monday (no behaviour change).
+  assert.equal(
+    computeRanges('Asia/Kolkata', 'week', now).current.start.getTime(),
+    computeRanges('Asia/Kolkata', 'week', now, undefined, undefined, 1).current.start.getTime(),
+  );
+});
