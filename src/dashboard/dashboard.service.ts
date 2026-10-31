@@ -35,9 +35,12 @@ function toUserRow(r: UserRowRaw, now: number) {
 export class DashboardService {
   constructor(private readonly prisma: PrismaService) {}
 
-  private async tenantTz(tenantId: string): Promise<string> {
-    const t = await this.prisma.tenant.findUnique({ where: { id: tenantId }, select: { timezone: true } });
-    return t?.timezone || 'Asia/Kolkata';
+  /** Timezone + week-start day for a tenant, with safe defaults (IST, Monday). */
+  private async tenantCfg(tenantId: string): Promise<{ tz: string; weekStartDay: number }> {
+    const t = await this.prisma.tenant.findUnique({
+      where: { id: tenantId }, select: { timezone: true, weekStartDay: true },
+    });
+    return { tz: t?.timezone || 'Asia/Kolkata', weekStartDay: t?.weekStartDay ?? 1 };
   }
 
   /** Successful deposit/withdrawal sums + active customers in a date window. */
@@ -77,7 +80,7 @@ export class DashboardService {
    * Supabase public.* read that froze). Lifetime figures come straight from
    * saas.customers; active/today counts from saas.transactions. */
   async userAnalytics(tenantId: string, masterId?: string) {
-    const tz = await this.tenantTz(tenantId);
+    const { tz } = await this.tenantCfg(tenantId);
     const now = Date.now();
 
     // Customer-side rollup. At scale this full-table aggregate is the slow part, so we
@@ -209,8 +212,8 @@ export class DashboardService {
   }
 
   async overview(tenantId: string, period: PeriodKey, customFrom?: string, customTo?: string, masterId?: string) {
-    const tz = await this.tenantTz(tenantId);
-    const ranges = computeRanges(tz, period, new Date(), customFrom, customTo);
+    const { tz, weekStartDay } = await this.tenantCfg(tenantId);
+    const ranges = computeRanges(tz, period, new Date(), customFrom, customTo, weekStartDay);
 
     const [curTxn, prevTxn, curCust, prevCust, totalCustomers] = await Promise.all([
       this.txnAgg(tenantId, ranges.current, masterId),
@@ -254,8 +257,8 @@ export class DashboardService {
     customTo?: string,
     masterId?: string,
   ): Promise<{ metric: string; kind: 'transactions' | 'customers'; label: string; rows: unknown[] }> {
-    const tz = await this.tenantTz(tenantId);
-    const { current: r, label } = computeRanges(tz, period, new Date(), customFrom, customTo);
+    const { tz, weekStartDay } = await this.tenantCfg(tenantId);
+    const { current: r, label } = computeRanges(tz, period, new Date(), customFrom, customTo, weekStartDay);
     const LIMIT = 500;
 
     if (metric === 'deposits' || metric === 'withdrawals' || metric === 'transactions') {
